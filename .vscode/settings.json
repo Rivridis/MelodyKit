@@ -1,0 +1,17 @@
+{
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "vscode.typescript-language-features"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "cmake.sourceDirectory": "B:/Github/MelodyKit/backend",
+  "files.associations": {
+    "*.py": "python",
+    ".env.local": "plaintext",
+    "*.mm": "cpp"
+  }
+}
