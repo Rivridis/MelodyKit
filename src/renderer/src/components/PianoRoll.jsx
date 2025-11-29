@@ -68,6 +68,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   // Keep an imperative ref in sync to avoid stale-closure in rAF playhead draws
   const isPlayingRef = useRef(false)
   const [mode, setMode] = useState('edit') // 'edit' | 'play'
+  const modeRef = useRef('edit') // Keep mode ref in sync for event handlers
   const pausedForEditRef = useRef(false) // track pause caused by drag/resize
   // When switching to Play via Space, defer starting playback until mode has applied
   const autoStartOnPlayRef = useRef(false)
@@ -192,6 +193,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Mirror playing state to ref for paint functions outside React's render timing
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
+  useEffect(() => { modeRef.current = mode }, [mode])
 
   // Enforce mode invariants: stop playback in edit mode, clear edit interactions when switching to play
   useEffect(() => {
@@ -248,11 +250,13 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         if (isTextBox) return
         e.preventDefault()
         if (isPlayingRef.current) {
-          // Pause and go back to Edit
+          // Pause (stay in current mode)
           try { togglePlayback() } catch {}
-          setMode('edit')
+        } else if (modeRef.current === 'play') {
+          // In play mode but paused → resume playback
+          try { togglePlayback() } catch {}
         } else {
-          // Ensure we start playing after Play mode applies
+          // In edit mode → switch to play mode and start playing
           autoStartOnPlayRef.current = true
           setMode('play')
         }
@@ -1410,8 +1414,18 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       // End of track
       setIsPlaying(false)
       setCurrentBeat(0)
+      currentBeatRef.current = 0
       playbackStartTimeRef.current = null
       lastPlayedBeatsRef.current.clear()
+      playbackMaxEndBeatRef.current = null
+      // Stop scheduler
+      try { playbackWorkerRef.current?.postMessage({ type: 'stop' }) } catch {}
+      for (const id of scheduledTimeoutsRef.current) { try { clearTimeout(id) } catch {} }
+      scheduledTimeoutsRef.current.clear()
+      if (playbackAnimationRef.current) {
+        cancelAnimationFrame(playbackAnimationRef.current)
+        playbackAnimationRef.current = null
+      }
       return
     }
     // Update refs & draw playheads directly to avoid full React re-render each frame
@@ -1432,13 +1446,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Playback (pause keeps cursor; resume starts from cursor)
   const togglePlayback = () => {
-    if (isPlaying) {
+    if (isPlayingRef.current) {
       // Pause: keep current cursor position
       setIsPlaying(false)
       if (playbackAnimationRef.current) {
         cancelAnimationFrame(playbackAnimationRef.current)
         playbackAnimationRef.current = null
       }
+      // Save the current playhead position when pausing
+      setCurrentBeat(currentBeatRef.current)
       playbackStartTimeRef.current = null
       lastPlayedBeatsRef.current.clear()
       playbackMaxEndBeatRef.current = null
@@ -1448,10 +1464,10 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       scheduledTimeoutsRef.current.clear()
     } else {
       // Only allow starting playback in Play mode for performance
-      if (mode !== 'play') return
+      if (modeRef.current !== 'play') return
       // Resume/start: from current cursor
       setIsPlaying(true)
-      const startBeat = currentBeat || 0
+      const startBeat = currentBeatRef.current || 0
       // Compute last note end as stop point
       const maxEndBeat = (() => {
         const arr = notesRef.current || []
@@ -1489,6 +1505,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
               } else if (type === 'ended') {
                 // Auto-stop when scheduler is done
                 setIsPlaying(false)
+                setCurrentBeat(0)
+                currentBeatRef.current = 0
+                playbackStartTimeRef.current = null
+                lastPlayedBeatsRef.current.clear()
+                playbackMaxEndBeatRef.current = null
+                if (playbackAnimationRef.current) {
+                  cancelAnimationFrame(playbackAnimationRef.current)
+                  playbackAnimationRef.current = null
+                }
               }
             }
           } catch {}

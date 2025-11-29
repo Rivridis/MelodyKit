@@ -313,13 +313,13 @@ app.whenReady().then(() => {
           const categoryName = item.name
           const files = fs.readdirSync(categoryPath)
           
-          // Find all audio and soundfont files (mp3, wav, ogg, sf2) in this category
-          const audioFiles = files.filter((f) => /\.(mp3|wav|ogg|sf2)$/i.test(f))
+          // Find all SF2 soundfont files in this category
+          const audioFiles = files.filter((f) => /\.sf2$/i.test(f))
 
-          // Create an instrument entry for each audio file
+          // Create an instrument entry for each SF2 file
           for (const audioFile of audioFiles) {
             // Use the filename (without extension) as the instrument name
-            const instrumentName = audioFile.replace(/\.(mp3|wav|ogg|sf2)$/i, '')
+            const instrumentName = audioFile.replace(/\.sf2$/i, '')
             
             // Store relative-to-resources path for lookups via get-resource-path
             const relativePath = `${categoryName}/${audioFile}`
