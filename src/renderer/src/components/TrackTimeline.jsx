@@ -501,12 +501,27 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
           // Use spessasynth_lib for SF2 files
           if (instrument.samplePath.toLowerCase().endsWith('.sf2')) {
-            const dest = ensureTrackDestination(trackId) || masterGainRef.current || audioContextRef.current.destination
+            // Load without destination to use shared cache (PianoRoll already loaded this)
             const sampler = await loadSf2Instrument(
               instrument.samplePath,
-              audioContextRef.current,
-              dest
+              audioContextRef.current
             )
+            // Route synth to this track's pre-gain chain for per-track volume control
+            if (sampler && sampler.synth) {
+              try {
+                const { pre } = ensureTrackChain(trackId)
+                if (pre) {
+                  try { sampler.synth.disconnect() } catch {}
+                  sampler.synth.connect(pre)
+                } else {
+                  const dest = masterGainRef.current || audioContextRef.current.destination
+                  try { sampler.synth.disconnect() } catch {}
+                  sampler.synth.connect(dest)
+                }
+              } catch (e) {
+                console.error(`Failed to route synth for track ${trackId}:`, e)
+              }
+            }
             loadedInstrumentsRef.current[trackId] = { type: 'sf2', data: sampler, samplePath: instrument.samplePath }
             console.log(`Track ${trackId} SF2 loaded via spessasynth_lib`)
           } else {

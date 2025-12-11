@@ -99,6 +99,10 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   const [instrumentLoading, setInstrumentLoading] = useState(false) // Track loading state
   const [keyLabels, setKeyLabels] = useState({}) // midi -> label (e.g., Snare, Hi-Hat)
   const [isDrumLike, setIsDrumLike] = useState(false)
+  // Guard async instrument loads to avoid race conditions when switching quickly
+  const loadSessionRef = useRef(0)
+  // Keep instrument synth in a ref so closures (like scheduleNoteAt) always see the latest
+  const spessaInstrumentRef = useRef(null)
   const canvasRef = useRef(null)
   const timelineCanvasRef = useRef(null)
   const playheadCanvasRef = useRef(null)
@@ -124,6 +128,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   const noteScheduleMapRef = useRef(new Map()) // subdivisionIndex -> notes array
   const notesRef = useRef(notes)
   const playableRangeRef = useRef({ min: 0, max: 127 })
+  // Track current playback session to ignore stale scheduled notes
+  const playbackSessionRef = useRef(0)
   const [playableRangeState, setPlayableRangeState] = useState({ min: 0, max: 127 })
   // History stack for Undo
   const historyRef = useRef([])
@@ -158,14 +164,20 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     if (stack.length === 0) setCanUndo(false)
   }
 
-  useEffect(() => {
-    // Use shared AudioContext across views
-    audioContextRef.current = getSharedAudioContext()
-    // Build a small preview chain: pre-boost -> soft limiter -> speakers
+  // Helper to ensure the preview chain is set up and connected to the audio destination
+  const ensurePreviewChainConnected = () => {
     try {
       const ctx = audioContextRef.current
-  const gain = ctx.createGain()
-  gain.gain.value = 2.2 // boost SF2 preview without affecting oscillator
+      if (!ctx) return false
+      // If chain already exists and is connected to the right context, verify connection
+      if (previewGainRef.current && previewLimiterRef.current) {
+        // Verify the limiter is still connected to destination
+        try { previewLimiterRef.current.connect(ctx.destination) } catch {}
+        return true
+      }
+      // Build a small preview chain: pre-boost -> soft limiter -> speakers
+      const gain = ctx.createGain()
+      gain.gain.value = 2.2 // boost SF2 preview without affecting oscillator
       const limiter = ctx.createDynamicsCompressor()
       limiter.threshold.value = -1
       limiter.ratio.value = 20
@@ -176,11 +188,22 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       limiter.connect(ctx.destination)
       previewGainRef.current = gain
       previewLimiterRef.current = limiter
-    } catch {}
+      return true
+    } catch (e) {
+      console.error('[PianoRoll] Failed to ensure preview chain:', e)
+      return false
+    }
+  }
+
+  useEffect(() => {
+    // Use shared AudioContext across views
+    audioContextRef.current = getSharedAudioContext()
+    ensurePreviewChainConnected()
+    
     return () => {
       // Do not close the shared context; just stop any ringing voices
-      if (spessaInstrument) {
-        try { spessaInstrument.stop() } catch {}
+      if (spessaInstrumentRef.current) {
+        try { spessaInstrumentRef.current.stop() } catch {}
       }
       try { previewGainRef.current?.disconnect() } catch {}
       try { previewLimiterRef.current?.disconnect() } catch {}
@@ -190,6 +213,9 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   }, [])
 
   useEffect(() => { notesRef.current = notes }, [notes])
+
+  // Sync instrument state to ref so closures always see latest
+  useEffect(() => { spessaInstrumentRef.current = spessaInstrument }, [spessaInstrument])
 
   // Mirror playing state to ref for paint functions outside React's render timing
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
@@ -285,33 +311,52 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   }
   useEffect(() => {
     const loadSharedSampler = async () => {
+      const sessionId = ++loadSessionRef.current
       if (!selectedInstrument) {
-        setSpessaInstrument(null)
+        // Clear current instrument only if still the latest session
+        if (loadSessionRef.current === sessionId) setSpessaInstrument(null)
         return
       }
-      if (!audioContextRef.current) return
-      setInstrumentLoading(true)
+      // Ensure we have an AudioContext before attempting to load
+      let ctx = audioContextRef.current
+      if (!ctx) {
+        try { ctx = getSharedAudioContext(); audioContextRef.current = ctx } catch {}
+      }
+      if (!ctx) return
+      if (loadSessionRef.current === sessionId) setInstrumentLoading(true)
       try {
-        if (spessaInstrument) {
-          // Stop any ringing voices (does not destroy sampler)
-          try { spessaInstrument.stop() } catch {}
+        // Proactively stop and disconnect previous preview synth to avoid hearing the old instrument
+        const prev = spessaInstrumentRef.current
+        if (prev) {
+          try { prev.stop() } catch {}
+          try { prev.synth?.disconnect() } catch {}
         }
         if (selectedInstrument.samplePath && selectedInstrument.samplePath.endsWith('.sf2')) {
-          const handle = await loadSf2Instrument(selectedInstrument.samplePath, audioContextRef.current)
+          // Ensure preview chain is properly connected before loading
+          ensurePreviewChainConnected()
+          const handle = await loadSf2Instrument(selectedInstrument.samplePath, ctx)
           // Route cached preview synth through our preview chain for louder output
-          try {
-            if (previewGainRef.current && handle && handle.synth) {
-              try { handle.synth.disconnect() } catch {}
+          if (handle && handle.synth) {
+            try {
+              // Ensure synth is connected to preview chain; don't disconnect first
+              // to avoid losing the bank+program selection that was set during load
               handle.synth.connect(previewGainRef.current)
+            } catch (e) {
+              console.error(`[PianoRoll] Failed to connect synth:`, e)
             }
-          } catch {}
-          setSpessaInstrument(handle)
+          }
+          // Only apply if this is still the latest request
+          if (loadSessionRef.current === sessionId) {
+            setSpessaInstrument(handle)
+          }
           // Query playable note range using spessasynth
           try {
-            const r = await getSf2NoteRange(selectedInstrument.samplePath, audioContextRef.current)
+            const r = await getSf2NoteRange(selectedInstrument.samplePath, ctx)
             if (r && typeof r.min === 'number' && typeof r.max === 'number') {
-              playableRangeRef.current = r
-              setPlayableRangeState(r)
+              if (loadSessionRef.current === sessionId) {
+                playableRangeRef.current = r
+                setPlayableRangeState(r)
+              }
             }
           } catch {}
           // Load per-key labels only if SF2 name contains "drumkit"
@@ -321,34 +366,46 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
             const shouldLoadLabels = normalized.includes('drumkit')
             if (shouldLoadLabels) {
               const { labels, isDrumLike } = await getSf2KeyLabels(selectedInstrument.samplePath)
-              setKeyLabels(labels || {})
-              setIsDrumLike(!!isDrumLike)
+              if (loadSessionRef.current === sessionId) {
+                setKeyLabels(labels || {})
+                setIsDrumLike(!!isDrumLike)
+              }
             } else {
+              if (loadSessionRef.current === sessionId) {
+                setKeyLabels({})
+                setIsDrumLike(false)
+              }
+            }
+          } catch {
+            if (loadSessionRef.current === sessionId) {
               setKeyLabels({})
               setIsDrumLike(false)
             }
-          } catch {
+          }
+          if (loadSessionRef.current === sessionId) {
+            setInstrumentLoading(false)
+            setShowInstrumentSelector(false)
+          }
+        } else {
+          if (loadSessionRef.current === sessionId) {
+            setSpessaInstrument(null)
+            setInstrumentLoading(false)
+            playableRangeRef.current = { min: 0, max: 127 }
+            setPlayableRangeState({ min: 0, max: 127 })
             setKeyLabels({})
             setIsDrumLike(false)
           }
+        }
+      } catch (err) {
+        console.error('Failed to load shared SF2 sampler:', err)
+        if (loadSessionRef.current === sessionId) {
           setInstrumentLoading(false)
-          setShowInstrumentSelector(false)
-        } else {
           setSpessaInstrument(null)
-          setInstrumentLoading(false)
           playableRangeRef.current = { min: 0, max: 127 }
           setPlayableRangeState({ min: 0, max: 127 })
           setKeyLabels({})
           setIsDrumLike(false)
         }
-      } catch (err) {
-        console.error('Failed to load shared SF2 sampler:', err)
-        setInstrumentLoading(false)
-        setSpessaInstrument(null)
-        playableRangeRef.current = { min: 0, max: 127 }
-        setPlayableRangeState({ min: 0, max: 127 })
-        setKeyLabels({})
-        setIsDrumLike(false)
       }
     }
     loadSharedSampler()
@@ -940,14 +997,14 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
     
     // If we have a loaded smplr instrument, use it
-  if (spessaInstrument && !instrumentLoading) {
+  if (spessaInstrumentRef.current && !instrumentLoading) {
       try {
         // Resume audio context if suspended (required for user interaction)
         if (audioContextRef.current.state === 'suspended') {
           audioContextRef.current.resume()
         }
   // Align preview velocity with Track view baseline for consistent loudness
-  playSf2Note(spessaInstrument, noteName, duration, 80)
+  playSf2Note(spessaInstrumentRef.current, noteName, duration, 80)
       } catch (error) {
         console.error('Error playing smplr note:', error)
         console.error('Error stack:', error.stack)
@@ -970,35 +1027,47 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     if (!ctx) return
     const now = ctx.currentTime
     const inSec = Math.max(0, whenSec - now)
-    if (spessaInstrument && !instrumentLoading) {
+    const sessionId = playbackSessionRef.current
+    if (spessaInstrumentRef.current && !instrumentLoading) {
       // Use setTimeout to call sampler near its target time; we schedule ahead so drift is minimal
       const id = setTimeout(() => {
-        try { playSf2Note(spessaInstrument, noteName, Math.max(0.01, durationSec || 0.3), velocity) } catch {}
+        // Only play if still the same playback session (not paused/stopped)
+        if (playbackSessionRef.current === sessionId) {
+          try { playSf2Note(spessaInstrumentRef.current, noteName, Math.max(0.01, durationSec || 0.3), velocity) } catch {}
+        }
         scheduledTimeoutsRef.current.delete(id)
       }, Math.floor(inSec * 1000))
       scheduledTimeoutsRef.current.add(id)
     } else {
       // Oscillator fallback: match Track view envelope and routing via preview limiter
-      try {
-        const oscCtx = ctx
-        const oscillator = oscCtx.createOscillator()
-        const gainNode = oscCtx.createGain()
-        oscillator.connect(gainNode)
-        // Prefer preview chain (gain -> soft limiter) for consistent tone
-        const dest = previewGainRef.current || oscCtx.destination
-        gainNode.connect(dest)
-        oscillator.frequency.value = noteToFrequency(noteName)
-        oscillator.type = 'sine'
-        const total = Math.max(0.01, durationSec || 0.3)
-        const fadeOut = Math.min(total * 0.1, 0.05)
-        const sustain = Math.max(0, total - fadeOut)
-        // Start at modest level to match timeline fallback
-        gainNode.gain.setValueAtTime(0.2, whenSec)
-        if (sustain > 0) gainNode.gain.setValueAtTime(0.2, whenSec + sustain)
-        gainNode.gain.exponentialRampToValueAtTime(0.001, whenSec + total)
-        oscillator.start(whenSec)
-        oscillator.stop(whenSec + total)
-      } catch {}
+      // Use setTimeout to allow session ID check (prevents ghost notes after pause)
+      const id = setTimeout(() => {
+        // Only play if still the same playback session (not paused/stopped)
+        if (playbackSessionRef.current === sessionId) {
+          try {
+            const oscCtx = ctx
+            const oscillator = oscCtx.createOscillator()
+            const gainNode = oscCtx.createGain()
+            oscillator.connect(gainNode)
+            // Prefer preview chain (gain -> soft limiter) for consistent tone
+            const dest = previewGainRef.current || oscCtx.destination
+            gainNode.connect(dest)
+            oscillator.frequency.value = noteToFrequency(noteName)
+            oscillator.type = 'sine'
+            const total = Math.max(0.01, durationSec || 0.3)
+            const fadeOut = Math.min(total * 0.1, 0.05)
+            const sustain = Math.max(0, total - fadeOut)
+            // Start at modest level to match timeline fallback
+            gainNode.gain.setValueAtTime(0.2, ctx.currentTime)
+            if (sustain > 0) gainNode.gain.setValueAtTime(0.2, ctx.currentTime + sustain)
+            gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + total)
+            oscillator.start(ctx.currentTime)
+            oscillator.stop(ctx.currentTime + total)
+          } catch {}
+        }
+        scheduledTimeoutsRef.current.delete(id)
+      }, Math.floor(inSec * 1000))
+      scheduledTimeoutsRef.current.add(id)
     }
   }
 
@@ -1418,6 +1487,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       playbackStartTimeRef.current = null
       lastPlayedBeatsRef.current.clear()
       playbackMaxEndBeatRef.current = null
+      playbackSessionRef.current++ // Invalidate any remaining scheduled notes
       // Stop scheduler
       try { playbackWorkerRef.current?.postMessage({ type: 'stop' }) } catch {}
       for (const id of scheduledTimeoutsRef.current) { try { clearTimeout(id) } catch {} }
@@ -1458,6 +1528,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       playbackStartTimeRef.current = null
       lastPlayedBeatsRef.current.clear()
       playbackMaxEndBeatRef.current = null
+      // Increment session ID so any in-flight timeouts won't play notes
+      playbackSessionRef.current++
       // Stop scheduler and clear pending timeouts
       try { playbackWorkerRef.current?.postMessage({ type: 'stop' }) } catch {}
       for (const id of scheduledTimeoutsRef.current) { try { clearTimeout(id) } catch {} }
@@ -1467,6 +1539,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       if (modeRef.current !== 'play') return
       // Resume/start: from current cursor
       setIsPlaying(true)
+      // Increment session ID for new playback session
+      playbackSessionRef.current++
       const startBeat = currentBeatRef.current || 0
       // Compute last note end as stop point
       const maxEndBeat = (() => {
@@ -1555,6 +1629,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   // Rewind to start; if playing, continue from start immediately
   const handleRewind = () => {
     setCurrentBeat(0)
+    currentBeatRef.current = 0
     if (isPlaying) {
       // Restart playhead timing from beginning without toggling state
       playbackStartTimeRef.current = Date.now()

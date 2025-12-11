@@ -125,8 +125,18 @@ export async function loadSf2Instrument(samplePath, audioContext, destination) {
   const u8ForLoad = cachedU8.slice() // clone
   await synth.soundBankManager.addSoundBank(u8ForLoad.buffer, 'main')
 
-  // Default to program 0 (GM Acoustic Grand Piano) on channel 0; users may switch later if needed
-  try { synth.programChange(0, 0) } catch {}
+  // Select a sensible preset so the instrument actually sounds after load
+  try {
+    const preset = await getSf2SuggestedPreset(samplePath)
+    if (preset) {
+      try { if (typeof synth.controlChange === 'function') synth.controlChange(0, 0, preset.bankMSB || 0) } catch {}
+      try { synth.programChange(0, preset.program || 0) } catch {}
+    } else {
+      try { synth.programChange(0, 0) } catch {}
+    }
+  } catch {
+    try { synth.programChange(0, 0) } catch {}
+  }
   // Boost channel volume/expression a bit to avoid perceived low loudness on some banks
   try {
     if (typeof synth.controlChange === 'function') {
@@ -188,8 +198,13 @@ export async function getSf2NoteRange(samplePath, audioContext) {
     const ab = u8.slice().buffer
     const bank = SoundBankLoader.fromArrayBuffer(ab)
     const presets = Array.isArray(bank?.presets) ? bank.presets : []
-    // Try program 0 on bank 0 first
-    let target = presets.find((p) => (p?.program | 0) === 0 && ((p?.bankMSB | 0) === 0)) || presets[0]
+    // Prefer a suggested preset consistent with loader
+    let target = null
+    try {
+      const s = await getSf2SuggestedPreset(samplePath)
+      if (s) target = presets.find((p) => ((p?.program | 0) === (s.program | 0)) && ((p?.bankMSB | 0) === (s.bankMSB | 0))) || null
+    } catch {}
+    if (!target) target = presets.find((p) => (p?.program | 0) === 0 && ((p?.bankMSB | 0) === 0)) || presets[0]
 
     const unionFromZones = (pres) => {
       let min = 127
@@ -351,6 +366,54 @@ export async function getSf2KeyLabels(samplePath) {
     return { labels, isDrumLike }
   } catch {
     return { labels: {}, isDrumLike: false }
+  }
+}
+
+/**
+ * Suggest a preset (program + bankMSB) that likely produces sound for the given SF2.
+ * Heuristic: prefer percussion bank 128 when path hints drums; else prefer program 0 on bank 0;
+ * otherwise pick the first preset with any zones.
+ */
+export async function getSf2SuggestedPreset(samplePath) {
+  try {
+    // Ensure bytes are cached
+    let u8 = fileBytesCache.get(samplePath)
+    if (!u8) {
+      const bytes = await window.api.getResourcePath(samplePath)
+      if (Array.isArray(bytes)) {
+        u8 = normalizeToImmutableU8(bytes)
+        fileBytesCache.set(samplePath, u8)
+      }
+    }
+    if (!u8) return null
+
+    let SoundBankLoader
+    try {
+      const core = await import('spessasynth_core')
+      SoundBankLoader = core?.SoundBankLoader
+    } catch {}
+    if (!SoundBankLoader) {
+      try {
+        const lib = await import('spessasynth_lib')
+        SoundBankLoader = lib?.SoundBankLoader
+      } catch {}
+    }
+    if (!SoundBankLoader) return null
+
+    const ab = u8.slice().buffer
+    const bank = SoundBankLoader.fromArrayBuffer(ab)
+    const presets = Array.isArray(bank?.presets) ? bank.presets : []
+    if (!presets.length) return null
+
+    const pathHintDrum = /drum|percuss|kit/i.test(String(samplePath))
+    // Prefer percussion bank
+    let target = (pathHintDrum && presets.find((p) => (p?.bankMSB | 0) === 128)) || null
+    if (!target) target = presets.find((p) => (p?.program | 0) === 0 && ((p?.bankMSB | 0) === 0)) || null
+    if (!target) target = presets.find((p) => Array.isArray(p?.zones) && p.zones.length > 0) || presets[0]
+
+    return target ? { program: target.program | 0, bankMSB: target.bankMSB | 0 } : null
+  } catch {
+    return null
   }
 }
 
