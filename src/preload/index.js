@@ -29,9 +29,18 @@ api.backend = {
   send: (line) => ipcRenderer.invoke('backend:send', line),
   // load an SF2 from resources (relative path under resources/)
   loadSF2: (relativePath) => ipcRenderer.invoke('backend:load-sf2', relativePath),
-  // note on that renders to a temporary wav and returns { ok, outPath }
+  // load a VST/VST3 plugin by absolute path for a specific track
+  loadVST: (trackId, pluginPath) => ipcRenderer.invoke('backend:load-vst', { trackId, pluginPath }),
+  // scan for available VST3 plugins
+  scanVSTs: () => ipcRenderer.invoke('backend:scan-vsts'),
+  // send a live note on/off pair to the plugin for a specific track
   noteOn: (opts) => ipcRenderer.invoke('backend:note-on', opts),
-  // render current state for durationMs
+  // optional helpers
+  panic: (trackId) => ipcRenderer.invoke('backend:panic', trackId),
+  status: () => ipcRenderer.invoke('backend:status'),
+  openEditor: (trackId) => ipcRenderer.invoke('backend:open-editor', trackId),
+  closeEditor: (trackId) => ipcRenderer.invoke('backend:close-editor', trackId),
+  // render current state for durationMs (legacy stub)
   render: (opts) => ipcRenderer.invoke('backend:render', opts),
   // listen to backend events coming from stdout lines
   onEvent: (cb) => {

@@ -1,0 +1,279 @@
+ #include "BackendHost.h"
+
+#include <juce_core/juce_core.h>
+#include <iostream>
+
+// Simple window to host the plugin's editor
+class PluginEditorWindow : public juce::DocumentWindow {
+public:
+    PluginEditorWindow(juce::AudioProcessor* proc)
+        : juce::DocumentWindow(proc->getName(), 
+                                juce::Colours::black, 
+                                juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
+          processor(proc)
+    {
+        if (auto* editor = proc->createEditorIfNeeded()) {
+            setContentOwned(editor, true);
+            setResizable(false, false);
+            centreWithSize(getWidth(), getHeight());
+            setVisible(true);
+            setUsingNativeTitleBar(true);
+        }
+    }
+
+    ~PluginEditorWindow() override {
+        // Clear content component before destruction to avoid double-deletion
+        clearContentComponent();
+    }
+
+    void closeButtonPressed() override {
+        setVisible(false);
+    }
+
+private:
+    juce::AudioProcessor* processor;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditorWindow)
+};
+
+namespace {
+// Utility to emit structured logs to stdout for the Electron bridge
+void emit(const juce::String& msg) {
+    std::cout << msg << std::endl;
+    std::cout.flush();
+}
+}
+
+BackendHost::BackendHost() {
+    // Manually register VST3 format (addDefaultFormats is deleted in console builds)
+#if JUCE_PLUGINHOST_VST3
+    formatManager.addFormat(std::make_unique<juce::VST3PluginFormat>());
+#endif
+    prepareDevice();
+
+    deviceManager.addAudioCallback(&player);
+}
+
+BackendHost::~BackendHost() {
+    closeEditor();
+    player.setProcessor(nullptr);
+    deviceManager.removeAudioCallback(&player);
+}
+
+void BackendHost::prepareDevice() {
+    if (deviceManager.getCurrentAudioDevice() != nullptr) return;
+
+    juce::String error = deviceManager.initialise(0, 2, nullptr, true, {}, nullptr);
+    if (error.isNotEmpty()) {
+        emit("ERROR AUDIO " + error);
+    }
+}
+
+double BackendHost::getSampleRate() const {
+    if (auto* device = deviceManager.getCurrentAudioDevice()) {
+        return device->getCurrentSampleRate();
+    }
+    return 44100.0;
+}
+
+int BackendHost::getBlockSize() const {
+    if (auto* device = deviceManager.getCurrentAudioDevice()) {
+        return device->getCurrentBufferSizeSamples();
+    }
+    return 512;
+}
+
+std::unique_ptr<juce::AudioPluginInstance> BackendHost::createPlugin(
+    const juce::File& file,
+    double sampleRate,
+    int blockSize,
+    juce::String& errorMessage) {
+
+    if (formatManager.getNumFormats() == 0) {
+        errorMessage = "No plugin formats available (VST3 support may not be compiled)";
+        return {};
+    }
+
+    juce::OwnedArray<juce::PluginDescription> types;
+    for (int i = 0; i < formatManager.getNumFormats(); ++i) {
+        if (auto* format = formatManager.getFormat(i)) {
+            format->findAllTypesForFile(types, file.getFullPathName());
+        }
+    }
+
+    if (types.isEmpty()) {
+        errorMessage = "No plugin types found in file";
+        return {};
+    }
+
+    return formatManager.createPluginInstance(*types[0], sampleRate, blockSize, errorMessage);
+}
+
+bool BackendHost::loadPlugin(const juce::File& file, juce::String& errorMessage) {
+    prepareDevice();
+
+    if (!file.existsAsFile()) {
+        errorMessage = "File not found: " + file.getFullPathName();
+        return false;
+    }
+
+    const double sr = getSampleRate();
+    const int blockSize = getBlockSize();
+
+    auto instance = createPlugin(file, sr, blockSize, errorMessage);
+    if (instance == nullptr) {
+        if (errorMessage.isEmpty()) errorMessage = "Unknown plugin load failure";
+        return false;
+    }
+
+    {
+        const juce::ScopedLock sl(pluginLock);
+        player.setProcessor(nullptr);
+        plugin = std::move(instance);
+        player.setProcessor(plugin.get());
+        player.getMidiMessageCollector().reset(sr);
+    }
+
+    emit("EVENT LOADED " + file.getFullPathName());
+    return true;
+}
+
+bool BackendHost::isPluginLoaded() const {
+    const juce::ScopedLock sl(pluginLock);
+    return plugin != nullptr;
+}
+
+juce::String BackendHost::getLoadedPluginName() const {
+    const juce::ScopedLock sl(pluginLock);
+    if (plugin == nullptr) return {};
+    return plugin->getName();
+}
+
+bool BackendHost::playNote(int midiNote, float velocity01, int durationMs, int channel) {
+    if (!isPluginLoaded()) return false;
+
+    velocity01 = juce::jlimit(0.0f, 1.0f, velocity01);
+    
+    // Send note-on immediately
+    juce::MidiMessage on = juce::MidiMessage::noteOn(channel, midiNote, velocity01);
+    player.getMidiMessageCollector().addMessageToQueue(on);
+
+    // Schedule note-off using a Timer for reliable timing
+    const int key = (channel << 8) | midiNote;
+    
+    // Cancel any existing timer for this note/channel
+    {
+        const juce::ScopedLock sl(timerLock);
+        activeNoteTimers.erase(key);
+    }
+    
+    // Create a lambda-based timer for the note-off
+    class NoteOffTimerCallback : public juce::Timer {
+    public:
+        NoteOffTimerCallback(BackendHost* host, int note, int chan, int timerKey)
+            : hostPtr(host), midiNote(note), channel(chan), key(timerKey) {}
+        
+        void timerCallback() override {
+            if (hostPtr) {
+                hostPtr->sendNoteOff(midiNote, channel);
+                // Remove self from active timers
+                const juce::ScopedLock sl(hostPtr->timerLock);
+                hostPtr->activeNoteTimers.erase(key);
+            }
+        }
+        
+    private:
+        BackendHost* hostPtr;
+        int midiNote;
+        int channel;
+        int key;
+    };
+    
+    auto timer = std::make_unique<NoteOffTimerCallback>(this, midiNote, channel, key);
+    timer->startTimer(durationMs);
+    
+    {
+        const juce::ScopedLock sl(timerLock);
+        activeNoteTimers[key].timer = std::move(timer);
+    }
+
+    return true;
+}
+
+void BackendHost::sendNoteOff(int midiNote, int channel) {
+    juce::MidiMessage off = juce::MidiMessage::noteOff(channel, midiNote);
+    player.getMidiMessageCollector().addMessageToQueue(off);
+}
+
+void BackendHost::allNotesOff() {
+    // Cancel all pending note-off timers
+    {
+        const juce::ScopedLock sl(timerLock);
+        activeNoteTimers.clear();
+    }
+    
+    // Send all notes off immediately
+    for (int ch = 1; ch <= 16; ++ch) {
+        auto msg = juce::MidiMessage::allNotesOff(ch);
+        player.getMidiMessageCollector().addMessageToQueue(msg);
+    }
+}
+
+bool BackendHost::openEditor(juce::String& errorMessage) {
+    const juce::ScopedLock sl(pluginLock);
+    
+    if (!plugin) {
+        errorMessage = "No plugin loaded";
+        return false;
+    }
+    
+    if (!plugin->hasEditor()) {
+        errorMessage = "Plugin does not have an editor";
+        return false;
+    }
+    
+    if (editorWindow && editorWindow->isVisible()) {
+        editorWindow->toFront(true);
+        return true;
+    }
+    
+    // Close any existing window first
+    if (editorWindow) {
+        editorWindow.reset();
+    }
+    
+    try {
+        editorWindow = std::make_unique<PluginEditorWindow>(plugin.get());
+        if (!editorWindow->isVisible()) {
+            errorMessage = "Failed to make editor window visible";
+            editorWindow.reset();
+            return false;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        errorMessage = juce::String("Failed to create editor window: ") + e.what();
+        editorWindow.reset();
+        return false;
+    }
+}
+
+void BackendHost::closeEditor() {
+    const juce::ScopedLock sl(pluginLock);
+    
+    if (editorWindow) {
+        // Get the editor before destroying window
+        auto* editor = plugin ? plugin->getActiveEditor() : nullptr;
+        
+        editorWindow->setVisible(false);
+        editorWindow.reset();
+        
+        // Notify plugin that editor is being deleted
+        if (plugin && editor) {
+            plugin->editorBeingDeleted(editor);
+        }
+    }
+}
+
+bool BackendHost::isEditorOpen() const {
+    const juce::ScopedLock sl(pluginLock);
+    return editorWindow != nullptr && editorWindow->isVisible();
+}

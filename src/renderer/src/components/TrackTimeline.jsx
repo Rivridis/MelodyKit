@@ -4,6 +4,7 @@ import { startRecording } from '../utils/exportWav'
 import { encodeToWav } from '../utils/fastWav'
 import { loadSf2Instrument, playSf2Note } from '../utils/spessaSf2'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
+import { playBackendNote, noteNameToMidi } from '@renderer/utils/vstBackend'
 
 const BEAT_WIDTH = 40
 const TRACK_HEIGHT = 80
@@ -63,7 +64,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -813,6 +814,24 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     
     console.log(`Playing note for track ${trackId}:`, noteName, 'Loaded instrument:', loadedInstrument)
     
+    // Check if track uses VST backend
+    const useVST = trackVSTMode && trackVSTMode[trackId]
+    if (useVST) {
+      try {
+        console.log(`Using VST backend for track ${trackId}`)
+        const midiNote = noteNameToMidi(noteName)
+        // Scale velocity by track volume
+        const vol = Math.max(50, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+        const baseVelocity = 0.8
+        const velocity = baseVelocity * (vol / 100)
+        playBackendNote(trackId, midiNote, velocity, Math.floor(duration * 1000), 1)
+        return
+      } catch (error) {
+        console.error('Error playing VST note:', error)
+        // Fall through to SF2/oscillator
+      }
+    }
+    
   // If we have a loaded SF2 for this track, use spessasynth_lib. Only fall back on explicit errors.
     if (loadedInstrument && loadedInstrument.type === 'sf2') {
       try {
@@ -1065,7 +1084,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const noteAbsoluteStart = (note.start || 0) + trackOffset
               const noteStartRounded = Math.round(noteAbsoluteStart * subdivisionsPerBeat) / subdivisionsPerBeat
               if (Math.abs(noteStartRounded - positionRounded) < epsilon) {
-                playNote(trackId, note.note, (note.duration || 0) * beatDuration / 1000)
+                playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000)
               }
             })
           })
@@ -1512,7 +1531,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 const noteAbsoluteStart = (note.start || 0) + trackOffset
                 const noteStartRounded = Math.round(noteAbsoluteStart * subdivisionsPerBeat) / subdivisionsPerBeat
                 if (Math.abs(noteStartRounded - positionRounded) < epsilon) {
-                  playNote(trackId, note.note, (note.duration || 0) * beatDuration / 1000)
+                  playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000)
                 }
               })
             })

@@ -1,8 +1,10 @@
 import { useRef, useEffect, useState } from 'react'
 import { Midi } from '@tonejs/midi'
 import InstrumentSelector from './InstrumentSelector'
+import VSTSelector from './VSTSelector'
 import { loadSf2Instrument, playSf2Note, getSf2NoteRange, getSf2KeyLabels } from '@renderer/utils/spessaSf2'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
+import { playBackendNote, noteNameToMidi, backendPanic, openVSTEditor } from '@renderer/utils/vstBackend'
 
 const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const OCTAVES = [2, 3, 4, 5, 6, 7]
@@ -63,7 +65,7 @@ function noteToFrequency(noteName) {
   return 440 * Math.pow(2, halfSteps / 12)
 }
 
-function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBack, gridWidth, setGridWidth, bpm, setBpm, selectedInstrument, onInstrumentChange }) {
+function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBack, gridWidth, setGridWidth, bpm, setBpm, selectedInstrument, onInstrumentChange, useVSTBackend = false, onVSTModeChange }) {
   const [isPlaying, setIsPlaying] = useState(false)
   // Keep an imperative ref in sync to avoid stale-closure in rAF playhead draws
   const isPlayingRef = useRef(false)
@@ -95,6 +97,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   const [gridDivision, setGridDivision] = useState(4) // 4 = quarter notes, 8 = eighth notes, 16 = sixteenth notes
   const [lastNoteDuration, setLastNoteDuration] = useState(null) // Remember last placed/resized note duration
   const [showInstrumentSelector, setShowInstrumentSelector] = useState(false)
+  const [showVSTSelector, setShowVSTSelector] = useState(false)
   const [spessaInstrument, setSpessaInstrument] = useState(null) // Store loaded spessasynth instrument
   const [instrumentLoading, setInstrumentLoading] = useState(false) // Track loading state
   const [keyLabels, setKeyLabels] = useState({}) // midi -> label (e.g., Snare, Hi-Hat)
@@ -103,6 +106,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   const loadSessionRef = useRef(0)
   // Keep instrument synth in a ref so closures (like scheduleNoteAt) always see the latest
   const spessaInstrumentRef = useRef(null)
+  // Keep VST backend mode in ref for immediate access without waiting for prop updates
+  const useVSTBackendRef = useRef(useVSTBackend)
   const canvasRef = useRef(null)
   const timelineCanvasRef = useRef(null)
   const playheadCanvasRef = useRef(null)
@@ -216,6 +221,9 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Sync instrument state to ref so closures always see latest
   useEffect(() => { spessaInstrumentRef.current = spessaInstrument }, [spessaInstrument])
+
+  // Sync VST backend mode to ref for immediate access
+  useEffect(() => { useVSTBackendRef.current = useVSTBackend }, [useVSTBackend])
 
   // Mirror playing state to ref for paint functions outside React's render timing
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
@@ -991,6 +999,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Play a note using smplr instrument
   const playNote = (noteName, duration = 0.3) => {
+    // Route to VST backend if enabled (use ref for immediate state)
+    if (useVSTBackendRef.current) {
+      const midiNote = noteNameToMidi(noteName)
+      // Use longer duration for better sustain (min 500ms for preview notes)
+      const durationMs = Math.max(500, Math.floor(duration * 1000))
+      playBackendNote(trackId, midiNote, 0.8, durationMs, 1)
+      return
+    }
+    
     if (!audioContextRef.current) {
       console.warn('No audio context available')
       return
@@ -1028,6 +1045,21 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     const now = ctx.currentTime
     const inSec = Math.max(0, whenSec - now)
     const sessionId = playbackSessionRef.current
+    
+    // Route to VST backend if enabled (use ref for immediate state)
+    if (useVSTBackendRef.current) {
+      const id = setTimeout(() => {
+        if (playbackSessionRef.current === sessionId) {
+          const midiNote = noteNameToMidi(noteName)
+          const vel = velocity / 127.0 // normalize to 0..1
+          playBackendNote(trackId, midiNote, vel, Math.floor((durationSec || 0.3) * 1000), 1)
+        }
+        scheduledTimeoutsRef.current.delete(id)
+      }, Math.floor(inSec * 1000))
+      scheduledTimeoutsRef.current.add(id)
+      return
+    }
+    
     if (spessaInstrumentRef.current && !instrumentLoading) {
       // Use setTimeout to call sampler near its target time; we schedule ahead so drift is minimal
       const id = setTimeout(() => {
@@ -1853,15 +1885,42 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
             {selectionMode ? 'Selecting…' : 'Select'}
           </button>
           <button
-            onClick={() => { if (mode === 'edit') setShowInstrumentSelector(true) }}
-            disabled={mode !== 'edit'}
-            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500'}`}
-            title={mode !== 'edit' ? 'Switch to Edit mode to change instrument' : 'Select Instrument'}
+            onClick={() => { if (mode === 'edit' && !useVSTBackend) setShowInstrumentSelector(true) }}
+            disabled={mode !== 'edit' || useVSTBackend}
+            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' || useVSTBackend ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500'}`}
+            title={useVSTBackend ? 'Instrument disabled (VST loaded)' : (mode !== 'edit' ? 'Switch to Edit mode to change instrument' : 'Select Instrument')}
           >
             <span className="text-base">{selectedInstrument?.icon || '🎹'}</span>
             <span className="text-sm font-medium">{selectedInstrument?.name || 'Select Instrument'}</span>
             <span className="text-xs text-zinc-400">▼</span>
           </button>
+          <button
+            onClick={() => { if (mode === 'edit') setShowVSTSelector(true) }}
+            disabled={mode !== 'edit'}
+            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (useVSTBackend ? 'bg-emerald-600/80 hover:bg-emerald-600 text-white border-emerald-500/50' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500')}`}
+            title={mode !== 'edit' ? 'Switch to Edit mode to load VST' : 'Load VST Plugin'}
+          >
+            <span className="text-base">🎛️</span>
+            <span className="text-sm font-medium">{useVSTBackend ? 'VST Loaded' : 'Load VST'}</span>
+          </button>
+          {useVSTBackend && (
+            <button
+              onClick={async () => {
+                if (mode === 'edit') {
+                  const success = await openVSTEditor(trackId)
+                  if (!success) {
+                    alert('Failed to open VST editor. Check console for details.')
+                  }
+                }
+              }}
+              disabled={mode !== 'edit'}
+              className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-emerald-600/80 hover:bg-emerald-700 text-white border-emerald-500/50'}`}
+              title={mode !== 'edit' ? 'Switch to Edit mode to edit VST' : 'Open VST Editor'}
+            >
+              <span className="text-base">⚙️</span>
+              <span className="text-sm font-medium">Edit VST</span>
+            </button>
+          )}
           <button
             onClick={handleImportMidi}
             disabled={mode !== 'edit'}
@@ -2045,6 +2104,60 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         currentInstrument={selectedInstrument}
         isLoadingInstrument={instrumentLoading}
       />
+
+      {/* VST Selector Modal */}
+      {showVSTSelector && (
+        <VSTSelector
+          trackId={trackId}
+          currentVSTPath={selectedInstrument?.vstPath}
+          useVSTBackend={useVSTBackend}
+          onVSTLoaded={(path) => {
+            // Thoroughly unload SF2 instrument before switching to VST
+            if (spessaInstrument) {
+              try {
+                // Stop all notes
+                spessaInstrument.stopAll()
+                // Stop the instrument
+                if (spessaInstrument.stop) spessaInstrument.stop()
+                // Disconnect the synth from audio chain
+                if (spessaInstrument.synth) {
+                  spessaInstrument.synth.disconnect()
+                }
+              } catch (e) {
+                console.error('Error cleaning up SF2:', e)
+              }
+            }
+            // Clear SF2 state completely
+            setSpessaInstrument(null)
+            spessaInstrumentRef.current = null
+            setInstrumentLoading(false)
+            
+            // Update ref immediately for instant routing switch
+            useVSTBackendRef.current = true
+            // Update state to trigger parent re-render with new useVSTBackend prop
+            if (onVSTModeChange) {
+              onVSTModeChange(true)
+            }
+            // Store VST path in selected instrument for reference
+            if (onInstrumentChange) {
+              onInstrumentChange({ ...selectedInstrument, vstPath: path })
+            }
+            console.log('VST loaded for track', trackId, 'from:', path)
+          }}
+          onVSTUnloaded={() => {
+            // Update ref immediately
+            useVSTBackendRef.current = false
+            if (onVSTModeChange) onVSTModeChange(false)
+            // Clear VST path from instrument
+            if (onInstrumentChange && selectedInstrument) {
+              const { vstPath, ...rest } = selectedInstrument
+              onInstrumentChange(rest)
+            }
+            console.log('VST unloaded for track', trackId)
+          }}
+          onClose={() => setShowVSTSelector(false)}
+        />
+      )}
     </div>
   )
 }

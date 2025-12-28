@@ -171,6 +171,28 @@ app.whenReady().then(() => {
     return sendToBackend(line)
   })
 
+  ipcMain.handle('backend:load-vst', async (event, { trackId, pluginPath }) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      if (!pluginPath || typeof pluginPath !== 'string') {
+        return { ok: false, error: 'invalid-plugin-path' }
+      }
+
+      const normalized = path.isAbsolute(pluginPath)
+        ? pluginPath
+        : path.join(process.cwd(), pluginPath)
+
+      if (!fs.existsSync(normalized)) return { ok: false, error: 'file-not-found', path: normalized }
+
+      // Quote the path so spaces survive the pipe to the backend process
+      return sendToBackend(`LOAD_VST ${trackId} "${normalized}"`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
   // Higher-level helpers used by renderer
   ipcMain.handle('backend:load-sf2', async (event, relativePath) => {
     try {
@@ -185,14 +207,126 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('backend:note-on', async (event, { presetIndex = 0, note = 60, vel = 1.0, durationMs = 500 }) => {
+  ipcMain.handle('backend:note-on', async (event, { trackId, note = 60, velocity = 0.8, durationMs = 500, channel = 1 } = {}) => {
     try {
-      const tempName = `melodykit_note_${Date.now()}.wav`
-      const outPath = path.join(app.getPath('temp'), tempName)
-      const line = `NOTE_ON ${presetIndex} ${note} ${vel} ${durationMs} ${outPath}`
-      const res = sendToBackend(line)
-      res.outPath = outPath
-      return res
+      if (!trackId) {
+        return { ok: false, error: 'missing-track-id' }
+      }
+      const line = `NOTE_ON ${trackId} ${note} ${velocity} ${durationMs} ${channel}`
+      return sendToBackend(line)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:panic', async (event, trackId = '') => {
+    try {
+      return sendToBackend(`PANIC ${trackId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:status', async () => {
+    try {
+      return sendToBackend('STATUS')
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:scan-vsts', async () => {
+    try {
+      const vsts = []
+      const vstSet = new Set() // Avoid duplicates
+      
+      // Standard VST3 paths on Windows
+      const commonPaths = [
+        'C:\\Program Files\\Common Files\\VST3',
+        'C:\\Program Files (x86)\\Common Files\\VST3'
+      ]
+      
+      // Add user-specific paths if they exist
+      if (process.env.APPDATA) {
+        commonPaths.push(path.join(process.env.APPDATA, 'VST3'))
+      }
+      if (process.env.LOCALAPPDATA) {
+        commonPaths.push(path.join(process.env.LOCALAPPDATA, 'Programs', 'Common', 'VST3'))
+      }
+
+      // Recursive scan helper
+      const scanDirectory = (dir, depth = 0) => {
+        if (depth > 3) return // Prevent infinite recursion
+        if (!fs.existsSync(dir)) return
+        
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+          
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name)
+            
+            if (entry.isDirectory()) {
+              // VST3 plugins are .vst3 folders (bundles)
+              if (entry.name.endsWith('.vst3')) {
+                const pluginName = entry.name.replace(/\.vst3$/i, '')
+                if (!vstSet.has(fullPath)) {
+                  vstSet.add(fullPath)
+                  vsts.push({
+                    name: pluginName,
+                    path: fullPath
+                  })
+                }
+              } else {
+                // Scan subdirectories (e.g., vendor folders)
+                scanDirectory(fullPath, depth + 1)
+              }
+            } else if (entry.isFile() && entry.name.endsWith('.vst3')) {
+              // Standalone .vst3 files (less common on Windows)
+              const pluginName = entry.name.replace(/\.vst3$/i, '')
+              if (!vstSet.has(fullPath)) {
+                vstSet.add(fullPath)
+                vsts.push({
+                  name: pluginName,
+                  path: fullPath
+                })
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`Error scanning ${dir}:`, err)
+        }
+      }
+
+      // Scan all common paths
+      for (const dir of commonPaths) {
+        scanDirectory(dir)
+      }
+
+      console.log(`Found ${vsts.length} VST3 plugin(s)`)
+      return { ok: true, vsts }
+    } catch (e) {
+      console.error('VST scan error:', e)
+      return { ok: false, error: String(e), vsts: [] }
+    }
+  })
+
+  ipcMain.handle('backend:open-editor', async (event, trackId) => {
+    try {
+      if (!trackId) {
+        return { ok: false, error: 'missing-track-id' }
+      }
+      return sendToBackend(`SHOW_UI ${trackId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:close-editor', async (event, trackId) => {
+    try {
+      if (!trackId) {
+        return { ok: false, error: 'missing-track-id' }
+      }
+      return sendToBackend(`CLOSE_UI ${trackId}`)
     } catch (e) {
       return { ok: false, error: String(e) }
     }

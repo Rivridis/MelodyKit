@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import TrackTimeline from './components/TrackTimeline'
 import TitleBar from './components/TitleBar'
 import SequencerPanel from './components/SequencerPanel'
+import { initBackend } from './utils/vstBackend'
 
 const TRACK_COLORS = [
   '#dee12e', '#f59e0b', '#10b981', '#3b82f6', 
@@ -18,6 +19,7 @@ function App() {
   const [trackVolumes, setTrackVolumes] = useState({}) // { trackId: volume (50-150) }
   const [trackBeats, setTrackBeats] = useState({}) // { trackId: { steps, rows: [{id,name,filePath,fileUrl,steps:boolean[]}]} }
   const [trackOffsets, setTrackOffsets] = useState({}) // { trackId: startBeat } - timeline offset for all tracks
+  const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
   const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.5 to 2)
   const [bpm, setBpm] = useState(120) // Global BPM for playback
@@ -25,6 +27,11 @@ function App() {
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
+
+  // Initialize VST backend on mount
+  useEffect(() => {
+    initBackend()
+  }, [])
 
   // Add new track
   const handleAddTrack = () => {
@@ -51,6 +58,11 @@ function App() {
     setTrackOffsets(prev => ({
       ...prev,
       [newTrack.id]: 0
+    }))
+    // Default VST mode off
+    setTrackVSTMode(prev => ({
+      ...prev,
+      [newTrack.id]: false
     }))
   }
 
@@ -193,7 +205,8 @@ function App() {
       trackNotes,
       trackInstruments,
       trackVolumes,
-      trackOffsets
+      trackOffsets,
+      trackVSTMode
     }
   }
 
@@ -258,6 +271,7 @@ function App() {
       const nextTrackInstruments = (p.trackInstruments && typeof p.trackInstruments === 'object') ? p.trackInstruments : {}
       const nextTrackVolumes = (p.trackVolumes && typeof p.trackVolumes === 'object') ? p.trackVolumes : {}
       const nextTrackOffsets = (p.trackOffsets && typeof p.trackOffsets === 'object') ? p.trackOffsets : {}
+      const nextTrackVSTMode = (p.trackVSTMode && typeof p.trackVSTMode === 'object') ? p.trackVSTMode : {}
       const nextTrackBeats = {}
       nextTracks.forEach((t) => {
         if (t.type === 'beat' && p.tracks) {
@@ -287,6 +301,11 @@ function App() {
   // default offset to 0 for any missing track ids
   setTrackOffsets(recomputedTracks.reduce((acc, t) => {
     acc[t.id] = typeof nextTrackOffsets[t.id] === 'number' ? nextTrackOffsets[t.id] : 0
+    return acc
+  }, {}))
+  // default VST mode to false for any missing track ids
+  setTrackVSTMode(recomputedTracks.reduce((acc, t) => {
+    acc[t.id] = typeof nextTrackVSTMode[t.id] === 'boolean' ? nextTrackVSTMode[t.id] : false
     return acc
   }, {}))
   // Stay on track timeline view after loading (do not auto-open Piano UI)
@@ -382,6 +401,10 @@ function App() {
                 setBpm={setBpm}
                 selectedInstrument={currentInstrument}
                 onInstrumentChange={(instrument) => handleInstrumentChange(selectedTrack.id, instrument)}
+                useVSTBackend={trackVSTMode[selectedTrack.id] || false}
+                onVSTModeChange={(enabled) => {
+                  setTrackVSTMode({ ...trackVSTMode, [selectedTrack.id]: enabled })
+                }}
               />
             )
           ) : (
@@ -396,6 +419,7 @@ function App() {
               setTrackVolumes={setTrackVolumes}
               trackOffsets={trackOffsets}
               setTrackOffsets={setTrackOffsets}
+              trackVSTMode={trackVSTMode}
               onSelectTrack={setSelectedTrackId}
               onAddTrack={handleAddTrack}
               gridWidth={gridWidth}

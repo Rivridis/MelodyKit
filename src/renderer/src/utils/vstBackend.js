@@ -1,0 +1,140 @@
+// Helpers to play notes via the JUCE backend hosting VSTs
+
+let backendReady = false
+let backendEventUnsubscribe = null
+
+// Initialize backend listener for event stream
+export function initBackend() {
+  if (backendEventUnsubscribe) return
+  
+  backendEventUnsubscribe = window.api.backend.onEvent((line) => {
+    if (line.startsWith('EVENT READY')) {
+      backendReady = true
+    } else if (line.startsWith('EVENT LOADED')) {
+      backendReady = true
+    } else if (line.startsWith('ERROR')) {
+      console.error('[Backend]', line)
+    }
+  })
+}
+
+// Load a VST plugin by absolute path for a specific track
+export async function loadVST(trackId, pluginPath) {
+  try {
+    const res = await window.api.backend.loadVST(String(trackId), pluginPath)
+    if (!res.ok) {
+      console.error(`Failed to load VST for track ${trackId}:`, res.error)
+      return false
+    }
+    backendReady = true
+    return true
+  } catch (e) {
+    console.error(`Error loading VST for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Unload VST plugin for a specific track (frontend-only, closes editor)
+export async function unloadVST(trackId) {
+  try {
+    // Just close the editor window - no need to send command to backend
+    // The frontend will handle state updates (useVSTBackend flag)
+    await closeVSTEditor(trackId)
+    return true
+  } catch (e) {
+    console.error(`Error unloading VST for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Play a note via the backend (trackId, note, velocity, durationMs, channel)
+// Returns immediately; note plays asynchronously in the backend
+export async function playBackendNote(trackId, midiNote, velocity = 0.8, durationMs = 500, channel = 1) {
+  if (!backendReady) {
+    console.warn('Backend not ready; skipping note')
+    return false
+  }
+  
+  try {
+    const res = await window.api.backend.noteOn({ 
+      trackId: String(trackId),
+      note: midiNote, 
+      velocity, 
+      durationMs, 
+      channel 
+    })
+    if (!res.ok) {
+      console.error(`Backend note failed for track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error playing backend note for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// All notes off (panic) for a specific track or all tracks
+export async function backendPanic(trackId = '') {
+  try {
+    await window.api.backend.panic(trackId)
+  } catch (e) {
+    console.error('Backend panic failed:', e)
+  }
+}
+
+// Check backend status
+export async function backendStatus() {
+  try {
+    const res = await window.api.backend.status()
+    return res
+  } catch (e) {
+    console.error('Backend status failed:', e)
+    return { ok: false }
+  }
+}
+
+// Open the VST plugin's native editor window for a specific track
+export async function openVSTEditor(trackId) {
+  try {
+    const res = await window.api.backend.openEditor(String(trackId))
+    if (!res.ok) {
+      console.error(`Failed to open VST editor for track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error opening VST editor for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Close the VST editor window for a specific track
+export async function closeVSTEditor(trackId) {
+  try {
+    await window.api.backend.closeEditor(String(trackId))
+    return true
+  } catch (e) {
+    console.error(`Error closing VST editor for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Convert note name like "C4" to MIDI note number (middle C = 60)
+export function noteNameToMidi(noteName) {
+  const noteMap = {
+    C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5,
+    'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11
+  }
+  const note = noteName.slice(0, -1)
+  const octave = parseInt(noteName.slice(-1))
+  return (octave + 1) * 12 + noteMap[note]
+}
+
+// Cleanup
+export function cleanupBackend() {
+  if (backendEventUnsubscribe) {
+    backendEventUnsubscribe()
+    backendEventUnsubscribe = null
+  }
+}
