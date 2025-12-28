@@ -3,12 +3,29 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <atomic>
 #include <map>
 #include <string>
+#include <vector>
 
 // Forward declaration
 class PluginEditorWindow;
+
+// MIDI note event for rendering
+struct MidiNoteEvent {
+    juce::String trackId;
+    double startTimeSeconds;
+    double durationSeconds;
+    int midiNote;
+    float velocity01;
+    int channel;
+    
+    MidiNoteEvent(const juce::String& tid, double start, double duration, 
+                  int note, float vel, int ch = 1)
+        : trackId(tid), startTimeSeconds(start), durationSeconds(duration),
+          midiNote(note), velocity01(vel), channel(ch) {}
+};
 
 // Multi-track JUCE host that manages multiple VST3 instances per track
 class BackendHost {
@@ -39,6 +56,18 @@ public:
     
     // Unload a track's plugin
     void unloadPlugin(const juce::String& trackId);
+
+    // Render MIDI notes to WAV file using realtime processing
+    // notes: array of MIDI events sorted by startTimeSeconds
+    // outputPath: output WAV file path
+    // sampleRate: output sample rate (default 44100)
+    // bitDepth: bit depth (16, 24, or 32)
+    // Returns true on success, false on failure (fills errorMessage)
+    bool renderToWav(const std::vector<MidiNoteEvent>& notes,
+                     const juce::File& outputPath,
+                     juce::String& errorMessage,
+                     double sampleRate = 44100.0,
+                     int bitDepth = 24);
 
     double getSampleRate() const;
     int getBlockSize() const;

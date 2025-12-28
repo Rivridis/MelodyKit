@@ -121,6 +121,77 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         return true;
     }
 
+    if (command == "RENDER_WAV") {
+        // Format: RENDER_WAV <outputPath> <sampleRate> <bitDepth> <base64EncodedNoteData>
+        // Note data is base64-encoded JSON array of notes
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 4) {
+            emit("ERROR RENDER_WAV missing-arguments (need outputPath sampleRate bitDepth noteData)");
+            return true;
+        }
+        
+        const juce::String outputPath = tokens[0].unquoted();
+        const double sampleRate = tokens[1].getDoubleValue();
+        const int bitDepth = tokens[2].getIntValue();
+        const juce::String noteDataB64 = tokens[3];
+        
+        // Decode base64 note data
+        juce::MemoryOutputStream decodedStream;
+        if (!juce::Base64::convertFromBase64(decodedStream, noteDataB64)) {
+            emit("ERROR RENDER_WAV failed-to-decode-note-data");
+            return true;
+        }
+        
+        // Parse JSON note array
+        juce::String jsonStr = decodedStream.toString();
+        juce::var jsonData;
+        try {
+            jsonData = juce::JSON::parse(jsonStr);
+        } catch (...) {
+            emit("ERROR RENDER_WAV failed-to-parse-json");
+            return true;
+        }
+        
+        if (!jsonData.isArray()) {
+            emit("ERROR RENDER_WAV note-data-not-array");
+            return true;
+        }
+        
+        // Build note event vector
+        std::vector<MidiNoteEvent> notes;
+        const juce::Array<juce::var>* noteArray = jsonData.getArray();
+        
+        for (int i = 0; i < noteArray->size(); ++i) {
+            const juce::var& noteObj = noteArray->getReference(i);
+            if (!noteObj.isObject()) continue;
+            
+            juce::String trackId = noteObj.getProperty("trackId", "").toString();
+            double startTime = noteObj.getProperty("startTime", 0.0);
+            double duration = noteObj.getProperty("duration", 0.5);
+            int midiNote = noteObj.getProperty("midiNote", 60);
+            float velocity = (float)noteObj.getProperty("velocity", 0.8);
+            int channel = noteObj.getProperty("channel", 1);
+            
+            notes.emplace_back(trackId, startTime, duration, midiNote, velocity, channel);
+        }
+        
+        if (notes.empty()) {
+            emit("ERROR RENDER_WAV no-valid-notes");
+            return true;
+        }
+        
+        juce::String err;
+        if (!ctx.host.renderToWav(notes, juce::File(outputPath), err, sampleRate, bitDepth)) {
+            emit("ERROR RENDER_WAV " + err);
+        } else {
+            emit("EVENT RENDER_COMPLETE " + outputPath);
+        }
+        return true;
+    }
+
     if (command == "QUIT" || command == "EXIT") {
         ctx.running = false;
         juce::MessageManager::getInstance()->stopDispatchLoop();

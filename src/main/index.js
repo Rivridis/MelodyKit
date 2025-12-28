@@ -345,6 +345,147 @@ app.whenReady().then(() => {
     }
   })
 
+  // Render MIDI notes to WAV using backend VST processing
+  ipcMain.handle('backend:render-wav', async (event, { notes, sampleRate = 44100, bitDepth = 24 }) => {
+    try {
+      if (!notes || !Array.isArray(notes) || notes.length === 0) {
+        return { ok: false, error: 'No notes provided' }
+      }
+
+      // Show save dialog first
+      const win = BrowserWindow.getFocusedWindow()
+      const ts = new Date()
+      const pad = (n) => String(n).padStart(2, '0')
+      const defaultName = `MelodyKit_${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.wav`
+      
+      const { canceled, filePath } = await dialog.showSaveDialog(win || undefined, {
+        title: 'Export VST Audio as WAV',
+        defaultPath: defaultName,
+        filters: [{ name: 'WAV Audio', extensions: ['wav'] }]
+      })
+      
+      if (canceled || !filePath) {
+        return { ok: false, canceled: true }
+      }
+
+      // Encode notes as JSON and then base64 for safe single-line transmission
+      const jsonStr = JSON.stringify(notes)
+      const base64Data = Buffer.from(jsonStr, 'utf-8').toString('base64')
+
+      // Send render command as single line
+      // Format: RENDER_WAV <outputPath> <sampleRate> <bitDepth> <base64EncodedNoteData>
+      const command = `RENDER_WAV "${filePath}" ${sampleRate} ${bitDepth} ${base64Data}`
+      
+      const proc = spawnBackendIfAvailable()
+      if (!proc) {
+        return { ok: false, error: 'Backend not available' }
+      }
+
+      // Send command
+      proc.stdin.write(command + '\n')
+
+      // Wait for render to complete or error
+      return new Promise((resolve) => {
+        let resolved = false
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true
+            resolve({ ok: false, error: 'Render timeout' })
+          }
+        }, 300000) // 5 minute timeout
+
+        const eventHandler = (data) => {
+          const msg = data.toString().trim()
+          console.log('[backend render]', msg)
+          
+          if (msg.includes('EVENT RENDER_COMPLETE')) {
+            if (!resolved) {
+              resolved = true
+              clearTimeout(timeout)
+              resolve({ ok: true, path: filePath })
+            }
+          } else if (msg.includes('ERROR RENDER_WAV')) {
+            if (!resolved) {
+              resolved = true
+              clearTimeout(timeout)
+              const error = msg.replace('ERROR RENDER_WAV ', '')
+              resolve({ ok: false, error })
+            }
+          }
+        }
+
+        proc.stdout.on('data', eventHandler)
+      })
+    } catch (e) {
+      console.error('Render error:', e)
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  // Render MIDI notes to temporary WAV file (no dialog, for mixing)
+  ipcMain.handle('backend:render-wav-temp', async (event, { notes, sampleRate = 44100, bitDepth = 24 }) => {
+    try {
+      if (!notes || !Array.isArray(notes) || notes.length === 0) {
+        return { ok: false, error: 'No notes provided' }
+      }
+
+      // Create temp file path
+      const tempName = `melodykit_vst_${Date.now()}.wav`
+      const filePath = path.join(app.getPath('temp'), tempName)
+
+      // Encode notes as JSON and then base64 for safe single-line transmission
+      const jsonStr = JSON.stringify(notes)
+      const base64Data = Buffer.from(jsonStr, 'utf-8').toString('base64')
+
+      // Send render command as single line
+      const command = `RENDER_WAV "${filePath}" ${sampleRate} ${bitDepth} ${base64Data}`
+      
+      const proc = spawnBackendIfAvailable()
+      if (!proc) {
+        return { ok: false, error: 'Backend not available' }
+      }
+
+      // Send command
+      proc.stdin.write(command + '\n')
+
+      // Wait for render to complete or error
+      return new Promise((resolve) => {
+        let resolved = false
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true
+            resolve({ ok: false, error: 'Render timeout' })
+          }
+        }, 300000) // 5 minute timeout
+
+        const eventHandler = (data) => {
+          const msg = data.toString().trim()
+          console.log('[backend render temp]', msg)
+          
+          if (msg.includes('EVENT RENDER_COMPLETE')) {
+            if (!resolved) {
+              resolved = true
+              clearTimeout(timeout)
+              resolve({ ok: true, path: filePath })
+            }
+          } else if (msg.includes('ERROR RENDER_WAV')) {
+            if (!resolved) {
+              resolved = true
+              clearTimeout(timeout)
+              const error = msg.replace('ERROR RENDER_WAV ', '')
+              resolve({ ok: false, error })
+            }
+          }
+        }
+
+        proc.stdout.on('data', eventHandler)
+      })
+    } catch (e) {
+      console.error('Render temp error:', e)
+      return { ok: false, error: String(e) }
+    }
+  })
+
 
   // IPC handler to get full path or bytes for a resource file (e.g., SF2)
   ipcMain.handle('get-resource-path', async (event, relativePath) => {

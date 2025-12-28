@@ -1574,7 +1574,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     }
   }
 
-  // Save current mix to WAV via real-time recording
+  // Save current mix to WAV via hybrid rendering: VST backend + SF2 realtime recording
   const exportDialogOpenRef = useRef(false)
 
   const handleSaveWav = async () => {
@@ -1586,6 +1586,189 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       // Do not allow saving while transport is running
       if (isPlaying) return
 
+      // Check if any tracks are using VST mode
+      const hasVSTTracks = tracks.some((t) => trackVSTMode?.[t.id])
+      const hasSF2Tracks = tracks.some((t) => !trackVSTMode?.[t.id] && (t.type !== 'audio' && t.type !== 'beat'))
+
+      if (hasVSTTracks && !hasSF2Tracks) {
+        // Pure VST export - use backend rendering only
+        setIsRecording(true)
+        
+        // Collect all MIDI notes from VST tracks
+        const allNotes = []
+        const beatDuration = 60.0 / bpm // seconds per beat
+        
+        Object.entries(trackNotesRef.current || {}).forEach(([trackId, notes]) => {
+          const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+          const isVST = trackVSTMode?.[trackId]
+          
+          if (!isVST) return
+          
+          notes.forEach((note) => {
+            const startBeat = (note.start || 0) + trackOffset
+            const durationBeats = note.duration || 1
+            const midiNote = noteNameToMidi(note.note)
+            
+            allNotes.push({
+              trackId: String(trackId),
+              startTime: startBeat * beatDuration,
+              duration: durationBeats * beatDuration,
+              midiNote: midiNote,
+              velocity: 0.8,
+              channel: 1
+            })
+          })
+        })
+        
+        if (allNotes.length === 0) {
+          console.warn('No VST notes to render')
+          setIsRecording(false)
+          exportDialogOpenRef.current = false
+          return
+        }
+        
+        allNotes.sort((a, b) => a.startTime - b.startTime)
+        
+        const result = await window.api.backend.renderWav(allNotes, 44100, 24)
+        
+        setIsRecording(false)
+        
+        if (result && result.ok) {
+          console.log('VST WAV rendered to:', result.path)
+        } else if (result && result.canceled) {
+          console.log('Render canceled')
+        } else {
+          console.error('Failed to render VST WAV:', result?.error)
+        }
+        
+        exportDialogOpenRef.current = false
+        return
+      }
+
+      if (hasVSTTracks && hasSF2Tracks) {
+        // Hybrid export: render VST to temp file, then mix with SF2 in realtime
+        setIsRecording(true)
+        
+        // Step 1: Collect and render VST notes to temporary file
+        const vstNotes = []
+        const beatDuration = 60.0 / bpm
+        
+        Object.entries(trackNotesRef.current || {}).forEach(([trackId, notes]) => {
+          const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+          const isVST = trackVSTMode?.[trackId]
+          
+          if (!isVST) return
+          
+          notes.forEach((note) => {
+            const startBeat = (note.start || 0) + trackOffset
+            const durationBeats = note.duration || 1
+            const midiNote = noteNameToMidi(note.note)
+            
+            vstNotes.push({
+              trackId: String(trackId),
+              startTime: startBeat * beatDuration,
+              duration: durationBeats * beatDuration,
+              midiNote: midiNote,
+              velocity: 0.8,
+              channel: 1
+            })
+          })
+        })
+        
+        if (vstNotes.length > 0) {
+          vstNotes.sort((a, b) => a.startTime - b.startTime)
+          
+          // Render to temp file (without showing save dialog)
+          const tempResult = await window.api.backend.renderWavTemp(vstNotes, 44100, 24)
+          
+          if (!tempResult || !tempResult.ok) {
+            setIsRecording(false)
+            exportDialogOpenRef.current = false
+            console.error('Failed to render VST tracks:', tempResult?.error)
+            return
+          }
+          
+          // Step 2: Load the rendered VST audio
+          const vstAudioBytes = await window.api.readAudioFile(tempResult.path)
+          if (!vstAudioBytes || !vstAudioBytes.ok) {
+            console.error('Failed to read rendered VST file')
+            setIsRecording(false)
+            exportDialogOpenRef.current = false
+            return
+          }
+          
+          const vstBuffer = await audioContextRef.current.decodeAudioData(
+            Uint8Array.from(vstAudioBytes.bytes).buffer
+          )
+          
+          // Step 3: Set up mixed recording
+          let maxEndBeat = 0
+          const tn = trackNotesRef.current || {}
+          Object.entries(tn).forEach(([trackId, notes = []]) => {
+            const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+            for (const n of notes) {
+              const endBeat = (n.start || 0) + (n.duration || 0) + trackOffset
+              if (endBeat > maxEndBeat) maxEndBeat = endBeat
+            }
+          })
+          
+          if (maxEndBeat <= 0) maxEndBeat = gridWidth
+          const totalSeconds = (maxEndBeat * 60) / bpm
+          const TAIL_SEC = 2.0 // Extra tail for reverb
+          
+          // Start recording from record bus
+          const recSource = recordBusRef.current || masterGainRef.current
+          const rec = startRecording(audioContextRef.current, recSource, { numChannels: 2 })
+          
+          // Step 4: Play VST audio buffer
+          const vstSource = audioContextRef.current.createBufferSource()
+          vstSource.buffer = vstBuffer
+          vstSource.connect(masterGainRef.current)
+          vstSource.start(audioContextRef.current.currentTime)
+          
+          // Step 5: Start SF2 playback
+          setCurrentBeat(0)
+          togglePlayback(0)
+          
+          // Wait for completion
+          await new Promise((res) => setTimeout(res, Math.ceil((totalSeconds + TAIL_SEC) * 1000)))
+          
+          vstSource.stop()
+          vstSource.disconnect()
+          
+          const { sampleRate, channels } = await rec.stop()
+          
+          // Stop playback
+          if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
+          setIsPlaying(false)
+          setCurrentBeat(0)
+          
+          // Save final mix
+          const ch = channels && channels.length > 0 ? channels : [new Float32Array()]
+          const stereo = ch.length >= 2 ? [ch[0], ch[1]] : [ch[0], ch[0]]
+          const wavBytes = encodeToWav({ channels: stereo, sampleRate })
+          
+          const ts = new Date()
+          const pad = (n) => String(n).padStart(2, '0')
+          const fname = `MelodyKit_${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.wav`
+          
+          const result = await window.api.saveWav(Array.from(wavBytes), fname)
+          
+          if (result && result.ok) {
+            console.log('Mixed WAV saved to:', result.path)
+          } else if (result && result.canceled) {
+            console.log('Save canceled')
+          } else {
+            console.error('Failed to save mixed WAV:', result?.error)
+          }
+          
+          setIsRecording(false)
+          exportDialogOpenRef.current = false
+          return
+        }
+      }
+
+      // Fall back to realtime recording for SF2/audio tracks only
       // Determine duration based on the actual end of notes/clips/beat loops across all tracks
       let maxEndBeat = 0
       const tn = trackNotesRef.current || {}

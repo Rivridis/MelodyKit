@@ -42,6 +42,10 @@ api.backend = {
   closeEditor: (trackId) => ipcRenderer.invoke('backend:close-editor', trackId),
   // render current state for durationMs (legacy stub)
   render: (opts) => ipcRenderer.invoke('backend:render', opts),
+  // render MIDI notes to WAV using VST processing
+  renderWav: (notes, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav', { notes, sampleRate, bitDepth }),
+  // render MIDI notes to temporary WAV file (no dialog, for mixing)
+  renderWavTemp: (notes, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav-temp', { notes, sampleRate, bitDepth }),
   // listen to backend events coming from stdout lines
   onEvent: (cb) => {
     const listener = (ev, payload) => cb(payload)
