@@ -629,7 +629,7 @@ function App() {
         isSavingRef.current = false
         setTimeout(() => setIsAutosaving(false), 500) // Show indicator briefly
       }
-    }, 1500) // debounce 1.5s for responsive autosave
+    }, 1000) // debounce 1s for responsive autosave
     
     return () => {
       if (autosaveTimerRef.current) {

@@ -99,7 +99,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
         <div className="bg-gradient-to-r from-[#3a3a3a] to-[#2d2d2d] px-6 py-4 border-b border-gray-700/50">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-xl font-semibold text-white">Audio Unit Manager</h2>
+              <h2 className="text-xl font-semibold text-white">VST3 Plugin Manager</h2>
               <p className="text-xs text-gray-400 mt-1">Select and manage VST3 instruments</p>
             </div>
             {onClose && (
