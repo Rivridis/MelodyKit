@@ -411,7 +411,7 @@ function App() {
       setCurrentProjectPath(resp.path || null)
       
       // Restore VST plugins and presets asynchronously (don't block UI)
-      setTimeout(async () => {
+      ;(async () => {
         console.log('[Load] Starting VST restoration...')
         console.log('[Load] nextTrackVSTPlugins:', nextTrackVSTPlugins)
         console.log('[Load] nextTrackVSTPresets:', Object.keys(nextTrackVSTPresets))
@@ -431,8 +431,8 @@ function App() {
               if (loadResult && loadResult.ok) {
                 console.log(`[Load] VST loaded for track ${trackId}:`, vstPath)
                 
-                // Wait longer for plugin to fully initialize
-                await new Promise(resolve => setTimeout(resolve, 1000))
+                // Wait for plugin to initialize
+                await new Promise(resolve => setTimeout(resolve, 150))
                 
                 // Restore preset state if available
                 if (nextTrackVSTPresets[trackId]) {
@@ -455,8 +455,8 @@ function App() {
                     if (response.startsWith(`EVENT STATE_SET ${trackId}`)) {
                       console.log(`[Load] ✓ Successfully restored VST preset for track ${trackId}`)
                       
-                      // Wait a bit before processing next track to ensure state is fully applied
-                      await new Promise(resolve => setTimeout(resolve, 500))
+                      // Brief delay before next track
+                      await new Promise(resolve => setTimeout(resolve, 100))
                     } else {
                       console.error(`[Load] ✗ Failed to restore VST preset for track ${trackId}: ${response}`)
                     }
@@ -479,7 +479,7 @@ function App() {
         // Re-enable autosave and clear loading indicator after restoration completes
         setIsRestoring(false)
         setIsLoading(false)
-      }, 100)
+      })()
     } catch (e) {
       console.error('Error loading project:', e)
       setIsLoading(false)
