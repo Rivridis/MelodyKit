@@ -6,6 +6,32 @@ import TitleBar from './components/TitleBar'
 import SequencerPanel from './components/SequencerPanel'
 import { initBackend } from './utils/vstBackend'
 
+// Helper to wait for backend response via event stream
+const waitForBackendEvent = (matchPattern, timeoutMs = 5000) => {
+  return new Promise((resolve, reject) => {
+    let unsubscribe = null
+    let eventCount = 0
+    const timeout = setTimeout(() => {
+      console.warn(`Timeout after ${timeoutMs}ms, received ${eventCount} events but none matched`)
+      if (unsubscribe) unsubscribe()
+      reject(new Error('Timeout waiting for backend event'))
+    }, timeoutMs)
+
+    unsubscribe = window.api.backend.onEvent((line) => {
+      eventCount++
+      console.log(`[Event ${eventCount}] Received backend event:`, line.substring(0, 150))
+      if (matchPattern(line)) {
+        console.log(`[Event ${eventCount}] ✓ Matched! Resolving...`)
+        clearTimeout(timeout)
+        if (unsubscribe) unsubscribe()
+        resolve(line)
+      } else {
+        console.log(`[Event ${eventCount}] ✗ Did not match pattern`)
+      }
+    })
+  })
+}
+
 const TRACK_COLORS = [
   '#dee12e', '#f59e0b', '#10b981', '#3b82f6', 
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
@@ -20,11 +46,13 @@ function App() {
   const [trackBeats, setTrackBeats] = useState({}) // { trackId: { steps, rows: [{id,name,filePath,fileUrl,steps:boolean[]}]} }
   const [trackOffsets, setTrackOffsets] = useState({}) // { trackId: startBeat } - timeline offset for all tracks
   const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend
+  const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
   const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.5 to 2)
   const [bpm, setBpm] = useState(120) // Global BPM for playback
   const [currentProjectPath, setCurrentProjectPath] = useState(null)
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
+  const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
 
@@ -172,6 +200,19 @@ function App() {
   // Update instrument for a track
   const handleInstrumentChange = (trackId, instrument) => {
     setTrackInstruments(prev => ({ ...prev, [trackId]: instrument }))
+    // Track VST plugin path if present
+    if (instrument && instrument.vstPath) {
+      console.log(`VST loaded for track ${trackId}: ${instrument.vstPath}`)
+      setTrackVSTPlugins(prev => ({ ...prev, [String(trackId)]: instrument.vstPath }))
+    } else {
+      // Remove VST plugin if switching to SF2 or no instrument
+      console.log(`Removing VST for track ${trackId}`)
+      setTrackVSTPlugins(prev => {
+        const updated = { ...prev }
+        delete updated[String(trackId)]
+        return updated
+      })
+    }
   }
 
   const selectedTrack = tracks.find(t => t.id === selectedTrackId)
@@ -179,10 +220,55 @@ function App() {
   const currentInstrument = selectedTrackId ? trackInstruments[selectedTrackId] : null
 
   // Build a serializable project object
-  const buildProject = () => {
+  const buildProject = async () => {
+    // Capture VST preset states for tracks with loaded VSTs
+    const trackVSTPresets = {}
+    console.log('Building project - trackVSTPlugins:', trackVSTPlugins)
+    console.log('Building project - trackVSTMode:', trackVSTMode)
+    
+    for (const [trackId, vstPath] of Object.entries(trackVSTPlugins)) {
+      console.log(`Checking track ${trackId}: vstPath=${vstPath}, vstMode=${trackVSTMode[trackId]}`)
+      if (trackVSTMode[trackId] && vstPath) {
+        try {
+          console.log(`Getting VST state for track ${trackId}...`)
+          
+          // Set up listener BEFORE sending command
+          const responsePromise = waitForBackendEvent(
+            (line) => line.startsWith(`EVENT STATE ${trackId} `) || line.startsWith(`ERROR GET_STATE ${trackId}`),
+            10000
+          )
+          
+          // Now send the command
+          await window.api?.backend?.getVSTState?.(String(trackId))
+          console.log(`GET_STATE command sent for track ${trackId}`)
+          
+          // Wait for response
+          try {
+            const response = await responsePromise
+            console.log(`VST state response for track ${trackId}:`, response.substring(0, 100))
+            
+            if (response.startsWith(`EVENT STATE ${trackId} `)) {
+              const stateData = response.substring(`EVENT STATE ${trackId} `.length)
+              trackVSTPresets[trackId] = stateData
+              console.log(`✓ Captured VST state for track ${trackId}, length: ${stateData.length}`)
+            } else {
+              console.warn(`✗ Failed to get VST state for track ${trackId}: ${response}`)
+            }
+          } catch (eventErr) {
+            console.error(`✗ Timeout waiting for VST state event for track ${trackId}:`, eventErr.message)
+          }
+        } catch (e) {
+          console.error(`✗ Failed to get VST state for track ${trackId}:`, e)
+        }
+      }
+    }
+    
+    console.log('Final trackVSTPresets keys:', Object.keys(trackVSTPresets))
+    console.log('Final trackVSTPresets sizes:', Object.entries(trackVSTPresets).map(([k,v]) => `${k}: ${v?.length || 0} bytes`))
+
     return {
       app: 'MelodyKit',
-      version: 1,
+      version: 2, // Bumped from 1 to 2 for VST preset support
       savedAt: new Date().toISOString(),
       bpm,
       gridWidth,
@@ -206,14 +292,16 @@ function App() {
       trackInstruments,
       trackVolumes,
       trackOffsets,
-      trackVSTMode
+      trackVSTMode,
+      trackVSTPlugins,
+      trackVSTPresets
     }
   }
 
   // Save project to file via Electron dialog
   const handleSaveProject = async () => {
     try {
-      const project = buildProject()
+      const project = await buildProject()
       if (currentProjectPath) {
         const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
         if (!r?.ok) console.error('Save to path failed:', r?.error)
@@ -272,6 +360,8 @@ function App() {
       const nextTrackVolumes = (p.trackVolumes && typeof p.trackVolumes === 'object') ? p.trackVolumes : {}
       const nextTrackOffsets = (p.trackOffsets && typeof p.trackOffsets === 'object') ? p.trackOffsets : {}
       const nextTrackVSTMode = (p.trackVSTMode && typeof p.trackVSTMode === 'object') ? p.trackVSTMode : {}
+      const nextTrackVSTPlugins = (p.trackVSTPlugins && typeof p.trackVSTPlugins === 'object') ? p.trackVSTPlugins : {}
+      const nextTrackVSTPresets = (p.trackVSTPresets && typeof p.trackVSTPresets === 'object') ? p.trackVSTPresets : {}
       const nextTrackBeats = {}
       nextTracks.forEach((t) => {
         if (t.type === 'beat' && p.tracks) {
@@ -308,9 +398,86 @@ function App() {
     acc[t.id] = typeof nextTrackVSTMode[t.id] === 'boolean' ? nextTrackVSTMode[t.id] : false
     return acc
   }, {}))
+  // Set VST plugin paths
+  setTrackVSTPlugins(nextTrackVSTPlugins)
   // Stay on track timeline view after loading (do not auto-open Piano UI)
   setSelectedTrackId(null)
       setCurrentProjectPath(resp.path || null)
+      
+      // Prevent autosave during VST restoration
+      setIsRestoring(true)
+      
+      // Restore VST plugins and presets asynchronously (don't block UI)
+      setTimeout(async () => {
+        console.log('[Load] Starting VST restoration...')
+        console.log('[Load] nextTrackVSTPlugins:', nextTrackVSTPlugins)
+        console.log('[Load] nextTrackVSTPresets:', Object.keys(nextTrackVSTPresets))
+        
+        // Process tracks sequentially to avoid race conditions
+        const trackIds = Object.keys(nextTrackVSTPlugins)
+        for (let i = 0; i < trackIds.length; i++) {
+          const trackId = trackIds[i]
+          const vstPath = nextTrackVSTPlugins[trackId]
+          
+          if (nextTrackVSTMode[trackId] && vstPath) {
+            try {
+              console.log(`[Load] [${i+1}/${trackIds.length}] Restoring VST for track ${trackId}...`)
+              
+              // Load the VST plugin
+              const loadResult = await window.api?.backend?.loadVST?.(trackId, vstPath)
+              if (loadResult && loadResult.ok) {
+                console.log(`[Load] VST loaded for track ${trackId}:`, vstPath)
+                
+                // Wait longer for plugin to fully initialize
+                await new Promise(resolve => setTimeout(resolve, 1000))
+                
+                // Restore preset state if available
+                if (nextTrackVSTPresets[trackId]) {
+                  console.log(`[Load] Setting VST preset for track ${trackId}, state length:`, nextTrackVSTPresets[trackId].length)
+                  try {
+                    // Set up listener BEFORE sending command
+                    const responsePromise = waitForBackendEvent(
+                      (line) => line.startsWith(`EVENT STATE_SET ${trackId}`) || line.startsWith(`ERROR SET_STATE ${trackId}`),
+                      15000
+                    )
+                    
+                    // Send SET_STATE command
+                    await window.api?.backend?.setVSTState?.(trackId, nextTrackVSTPresets[trackId])
+                    console.log(`[Load] SET_STATE command sent for track ${trackId}`)
+                    
+                    // Wait for confirmation
+                    const response = await responsePromise
+                    console.log(`[Load] setVSTState response:`, response)
+                    
+                    if (response.startsWith(`EVENT STATE_SET ${trackId}`)) {
+                      console.log(`[Load] ✓ Successfully restored VST preset for track ${trackId}`)
+                      
+                      // Wait a bit before processing next track to ensure state is fully applied
+                      await new Promise(resolve => setTimeout(resolve, 500))
+                    } else {
+                      console.error(`[Load] ✗ Failed to restore VST preset for track ${trackId}: ${response}`)
+                    }
+                  } catch (err) {
+                    console.error(`[Load] Exception or timeout restoring VST state for track ${trackId}:`, err.message)
+                  }
+                } else {
+                  console.warn(`[Load] No preset data found for track ${trackId}`)
+                }
+              } else {
+                console.error(`[Load] Failed to load VST for track ${trackId}:`, loadResult?.error)
+              }
+            } catch (e) {
+              console.error(`[Load] Error restoring VST for track ${trackId}:`, e)
+            }
+          }
+        }
+        console.log('[Load] VST restoration complete')
+        
+        // Re-enable autosave and clear loading indicator after restoration completes
+        setIsRestoring(false)
+        setIsLoading(false)
+      }, 100)
+      
       // Keep loading=true; TrackTimeline will clear it after instruments load
     } catch (e) {
       console.error('Error loading project:', e)
@@ -323,10 +490,10 @@ function App() {
 
   // Autosave to current file (debounced) whenever state changes and a project path exists
   useEffect(() => {
-    if (!currentProjectPath) return
+    if (!currentProjectPath || isRestoring) return
     const id = setTimeout(async () => {
       try {
-        const project = buildProject()
+        const project = await buildProject()
         const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
         if (!r?.ok) console.error('Autosave failed:', r?.error)
       } catch (e) {
@@ -334,7 +501,7 @@ function App() {
       }
     }, 500) // debounce 500ms
     return () => clearTimeout(id)
-  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, bpm, gridWidth, zoom, currentProjectPath])
+  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackVSTMode, trackVSTPlugins, bpm, gridWidth, zoom, currentProjectPath])
 
   const timelineRef = useRef(null)
 
@@ -355,7 +522,7 @@ function App() {
         onLoadProject={handleLoadProject}
         onSaveAsProject={async () => {
           try {
-            const project = buildProject()
+            const project = await buildProject()
             const resp = await window.api?.saveProject?.(project, 'MelodyKit_Project.melodykit')
             if (resp?.ok) setCurrentProjectPath(resp.path)
           } catch (e) {
@@ -403,6 +570,7 @@ function App() {
                 onInstrumentChange={(instrument) => handleInstrumentChange(selectedTrack.id, instrument)}
                 useVSTBackend={trackVSTMode[selectedTrack.id] || false}
                 onVSTModeChange={(enabled) => {
+                  console.log(`VST mode changed for track ${selectedTrack.id}: ${enabled}`)
                   setTrackVSTMode({ ...trackVSTMode, [selectedTrack.id]: enabled })
                 }}
               />
@@ -429,6 +597,7 @@ function App() {
               bpm={bpm}
               setBpm={setBpm}
               onLoadingChange={setIsLoading}
+              isRestoring={isRestoring}
             />
           )}
         </div>

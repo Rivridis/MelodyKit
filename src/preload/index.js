@@ -48,6 +48,10 @@ api.backend = {
   renderWav: (notes, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav', { notes, sampleRate, bitDepth }),
   // render MIDI notes to temporary WAV file (no dialog, for mixing)
   renderWavTemp: (notes, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav-temp', { notes, sampleRate, bitDepth }),
+  // Get VST plugin preset state (base64-encoded binary data)
+  getVSTState: (trackId) => ipcRenderer.invoke('backend:get-vst-state', trackId),
+  // Set VST plugin preset state (from base64-encoded binary data)
+  setVSTState: (trackId, state) => ipcRenderer.invoke('backend:set-vst-state', { trackId, state }),
   // listen to backend events coming from stdout lines
   onEvent: (cb) => {
     const listener = (ev, payload) => cb(payload)

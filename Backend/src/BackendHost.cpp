@@ -231,6 +231,87 @@ void BackendHost::unloadPlugin(const juce::String& trackId) {
     tracks.erase(it);
 }
 
+juce::String BackendHost::getPluginState(const juce::String& trackId) const {
+    const juce::ScopedLock sl(tracksLock);
+    auto it = tracks.find(trackId);
+    if (it == tracks.end() || !it->second.plugin) {
+        emit("DEBUG GET_STATE: No plugin found for track " + trackId);
+        return {};
+    }
+    
+    emit("DEBUG GET_STATE: Found plugin for track " + trackId + ": " + it->second.plugin->getName());
+    
+    juce::MemoryBlock stateData;
+    it->second.plugin->getStateInformation(stateData);
+    
+    emit("DEBUG GET_STATE: Retrieved " + juce::String((int)stateData.getSize()) + " bytes");
+    
+    if (stateData.getSize() == 0) {
+        emit("DEBUG GET_STATE: State data is empty");
+        return {};
+    }
+    
+    auto base64 = stateData.toBase64Encoding();
+    emit("DEBUG GET_STATE: Encoded to base64, length: " + juce::String(base64.length()));
+    return base64;
+}
+
+bool BackendHost::setPluginState(const juce::String& trackId, const juce::String& base64State) {
+    const juce::ScopedLock sl(tracksLock);
+    auto it = tracks.find(trackId);
+    if (it == tracks.end() || !it->second.plugin) {
+        emit("DEBUG SET_STATE: No plugin found for track " + trackId);
+        return false;
+    }
+    
+    emit("DEBUG SET_STATE: Found plugin for track " + trackId + ": " + it->second.plugin->getName());
+    
+    if (base64State.isEmpty()) {
+        emit("DEBUG SET_STATE: Base64 state is empty");
+        return false;
+    }
+    
+    emit("DEBUG SET_STATE: Decoding base64, length: " + juce::String(base64State.length()));
+    
+    juce::MemoryBlock stateData;
+    if (!stateData.fromBase64Encoding(base64State)) {
+        emit("DEBUG SET_STATE: Failed to decode base64");
+        return false;
+    }
+    
+    emit("DEBUG SET_STATE: Decoded to " + juce::String((int)stateData.getSize()) + " bytes");
+    
+    auto& plugin = it->second.plugin;
+    
+    // Suspend processing before setting state
+    emit("DEBUG SET_STATE: Suspending processing");
+    plugin->suspendProcessing(true);
+    
+    // Release resources temporarily
+    emit("DEBUG SET_STATE: Releasing resources");
+    plugin->releaseResources();
+    
+    // Set the plugin state
+    emit("DEBUG SET_STATE: Calling setStateInformation");
+    plugin->setStateInformation(stateData.getData(), (int)stateData.getSize());
+    
+    // Re-prepare the plugin with current settings to ensure state is applied
+    emit("DEBUG SET_STATE: Re-preparing plugin");
+    plugin->prepareToPlay(getSampleRate(), getBlockSize());
+    
+    // Resume processing to ensure plugin updates its parameters
+    emit("DEBUG SET_STATE: Resuming processing");
+    plugin->suspendProcessing(false);
+    
+    // Notify the plugin and host that parameters have changed
+    emit("DEBUG SET_STATE: Updating host display");
+    plugin->updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withParameterInfoChanged(true)
+                                                                           .withProgramChanged(true));
+    
+    emit("DEBUG SET_STATE: Successfully set state for track " + trackId);
+    return true;
+}
+
 bool BackendHost::isPluginLoaded(const juce::String& trackId) const {
     const juce::ScopedLock sl(tracksLock);
     auto it = tracks.find(trackId);

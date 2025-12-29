@@ -133,14 +133,31 @@ app.whenReady().then(() => {
     const { spawn } = require('child_process')
     backendProc = spawn(exe, [], { stdio: ['pipe', 'pipe', 'pipe'] })
 
+    // Buffer for accumulating incomplete lines
+    let stdoutBuffer = ''
+    
     backendProc.stdout.on('data', (data) => {
-      const s = data.toString().trim()
-      console.log('[backend]', s)
-      // Forward events to renderer(s)
-      for (const w of BrowserWindow.getAllWindows()) {
-        w.webContents.send('backend:event', s)
+      // Accumulate data in buffer
+      stdoutBuffer += data.toString()
+      
+      // Process complete lines
+      const lines = stdoutBuffer.split('\n')
+      // Keep the last incomplete line in buffer
+      stdoutBuffer = lines.pop() || ''
+      
+      // Forward complete lines
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed) {
+          console.log('[backend]', trimmed.substring(0, 150))
+          // Forward events to renderer(s)
+          for (const w of BrowserWindow.getAllWindows()) {
+            w.webContents.send('backend:event', trimmed)
+          }
+        }
       }
     })
+    
     backendProc.stderr.on('data', (data) => {
       const s = data.toString().trim()
       console.error('[backend:err]', s)
@@ -342,6 +359,31 @@ app.whenReady().then(() => {
     } catch (e) {
       return { ok: false, error: String(e) }
     }
+  })
+
+  // Get VST plugin preset state (base64-encoded)
+  ipcMain.handle('backend:get-vst-state', async (event, trackId) => {
+    console.log(`[IPC] Getting VST state for track: ${trackId}`)
+    if (!trackId || typeof trackId !== 'string') {
+      return { ok: false, error: 'invalid-track-id' }
+    }
+
+    const command = `GET_STATE ${trackId}\n`
+    console.log(`[IPC] Sending command: ${command.trim()}`)
+    return sendToBackend(command)
+  })
+
+  // Set VST plugin preset state (from base64-encoded data)
+  ipcMain.handle('backend:set-vst-state', async (event, { trackId, state }) => {
+    console.log(`[IPC] Setting VST state for track: ${trackId}, state length: ${state?.length || 0}`)
+    if (!trackId || typeof trackId !== 'string') {
+      return { ok: false, error: 'invalid-track-id' }
+    }
+    if (!state || typeof state !== 'string') {
+      return { ok: false, error: 'invalid-state-data' }
+    }
+
+    return sendToBackend(`SET_STATE ${trackId} ${state}`)
   })
 
   ipcMain.handle('backend:render', async (event, { durationMs = 1000 }) => {

@@ -64,7 +64,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange, isRestoring }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -547,14 +547,14 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         }
       }
 
-      // Only clear loading if this is the latest session
-      if (loadSessionRef.current === sessionId) {
+      // Only clear loading if this is the latest session and not restoring VSTs
+      if (loadSessionRef.current === sessionId && !isRestoring) {
         try { onLoadingChange?.(false) } catch {}
       }
     }
     
     loadAllInstruments()
-  }, [trackInstruments, audioReady])
+  }, [trackInstruments, audioReady, isRestoring])
 
   // Sync bpmInput when bpm prop changes (e.g., from PianoRoll)
   useEffect(() => {
@@ -915,8 +915,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   // Playback all tracks
   const togglePlayback = (startBeatOverride) => {
-    // Prevent toggling playback while recording/exporting or when there are no tracks
-    if (isRecording) return
+    // Prevent toggling playback while recording/exporting, restoring VSTs, or when there are no tracks
+    if (isRecording || isRestoring) return
     if (!tracks || tracks.length === 0) return
     if (isPlaying) {
       setIsPlaying(false)
@@ -1937,10 +1937,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
           <button
             onClick={togglePlayback}
-            disabled={isRecording || tracks.length === 0}
-            title={isPlaying ? 'Pause' : 'Play'}
-            aria-label={isPlaying ? 'Pause' : 'Play'}
-            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white shadow focus:outline-none focus:ring-2 focus:ring-emerald-400/60"
+            disabled={isRecording || isRestoring || tracks.length === 0}
+            title={isRestoring ? 'Loading VST presets...' : (isPlaying ? 'Pause' : 'Play')}
+            aria-label={isRestoring ? 'Loading VST presets' : (isPlaying ? 'Pause' : 'Play')}
+            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed text-white shadow focus:outline-none focus:ring-2 focus:ring-emerald-400/60"
           >
             {isPlaying ? (
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">

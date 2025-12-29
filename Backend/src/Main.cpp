@@ -142,6 +142,43 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         emit("EVENT EDITOR_CLOSED " + trackId);
         return true;
     }
+    
+    if (command == "GET_STATE") {
+        const juce::String trackId = args.trim();
+        if (trackId.isEmpty()) {
+            emit("ERROR GET_STATE missing-track-id");
+            return true;
+        }
+        
+        juce::String state = ctx.host.getPluginState(trackId);
+        if (state.isEmpty()) {
+            emit("ERROR GET_STATE " + trackId + " no-plugin-or-no-state");
+        } else {
+            emit("EVENT STATE " + trackId + " " + state);
+        }
+        return true;
+    }
+    
+    if (command == "SET_STATE") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR SET_STATE missing-track-id-or-state-data");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String base64State = tokens[1];
+        
+        if (!ctx.host.setPluginState(trackId, base64State)) {
+            emit("ERROR SET_STATE " + trackId + " failed-to-set-state");
+        } else {
+            emit("EVENT STATE_SET " + trackId);
+        }
+        return true;
+    }
 
     if (command == "RENDER_WAV") {
         // Format: RENDER_WAV <outputPath> <sampleRate> <bitDepth> <base64EncodedNoteData>

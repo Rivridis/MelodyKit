@@ -61,6 +61,14 @@ public:
     // Unload a track's plugin
     void unloadPlugin(const juce::String& trackId);
 
+    // Get plugin state as base64-encoded data for saving presets
+    // Returns empty string if no plugin loaded or state cannot be retrieved
+    juce::String getPluginState(const juce::String& trackId) const;
+    
+    // Set plugin state from base64-encoded data to restore presets
+    // Returns true on success, false if no plugin loaded or data invalid
+    bool setPluginState(const juce::String& trackId, const juce::String& base64State);
+
     // Render MIDI notes to WAV file using realtime processing
     // notes: array of MIDI events sorted by startTimeSeconds
     // outputPath: output WAV file path
