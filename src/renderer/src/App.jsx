@@ -370,11 +370,17 @@ function App() {
         }
       })
 
+      console.log('[Load] nextTrackOffsets:', nextTrackOffsets)
+      console.log('[Load] nextTrackBeats:', Object.keys(nextTrackBeats), nextTrackBeats)
+
       // Recompute noteCount for each track
       const recomputedTracks = nextTracks.map(t => ({
         ...t,
         noteCount: t.type === 'audio' ? 0 : (Array.isArray(nextTrackNotes[t.id]) ? nextTrackNotes[t.id].length : 0)
       }))
+
+      // Prevent autosave during state restoration
+      setIsRestoring(true)
 
       setBpm(nextBpm)
       setGridWidth(nextGrid)
@@ -403,9 +409,6 @@ function App() {
   // Stay on track timeline view after loading (do not auto-open Piano UI)
   setSelectedTrackId(null)
       setCurrentProjectPath(resp.path || null)
-      
-      // Prevent autosave during VST restoration
-      setIsRestoring(true)
       
       // Restore VST plugins and presets asynchronously (don't block UI)
       setTimeout(async () => {
@@ -477,8 +480,6 @@ function App() {
         setIsRestoring(false)
         setIsLoading(false)
       }, 100)
-      
-      // Keep loading=true; TrackTimeline will clear it after instruments load
     } catch (e) {
       console.error('Error loading project:', e)
       setIsLoading(false)
@@ -496,12 +497,37 @@ function App() {
         const project = await buildProject()
         const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
         if (!r?.ok) console.error('Autosave failed:', r?.error)
+        else console.log('[Autosave] ✓ Saved (debounced)')
       } catch (e) {
         console.error('Autosave error:', e)
       }
     }, 500) // debounce 500ms
     return () => clearTimeout(id)
   }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackVSTMode, trackVSTPlugins, bpm, gridWidth, zoom, currentProjectPath])
+
+  // Periodic autosave for VST tracks (parameters change outside React state)
+  useEffect(() => {
+    if (!currentProjectPath || isRestoring) return
+    
+    // Check if any VST tracks exist
+    const hasVSTTracks = Object.keys(trackVSTPlugins).some(trackId => trackVSTMode[trackId] && trackVSTPlugins[trackId])
+    if (!hasVSTTracks) return
+    
+    // Save every 5 seconds when VST tracks are active
+    const interval = setInterval(async () => {
+      try {
+        console.log('[Periodic VST autosave] Capturing VST states...')
+        const project = await buildProject()
+        const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
+        if (!r?.ok) console.error('Periodic VST autosave failed:', r?.error)
+        else console.log('[Periodic VST autosave] ✓ Saved')
+      } catch (e) {
+        console.error('Periodic VST autosave error:', e)
+      }
+    }, 5000) // every 5 seconds
+    
+    return () => clearInterval(interval)
+  }, [currentProjectPath, trackVSTPlugins, trackVSTMode, isRestoring])
 
   const timelineRef = useRef(null)
 
@@ -532,7 +558,7 @@ function App() {
         onExportWav={() => timelineRef.current?.exportWav?.()}
         onImportAudio={handleImportAudio}
         currentProjectPath={currentProjectPath}
-        loading={isLoading}
+        loading={isLoading || isRestoring}
       />
       <div className="flex-1 min-h-0 min-w-0 flex">
         <Sidebar

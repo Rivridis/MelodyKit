@@ -21,7 +21,7 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
 
   useEffect(() => {
     setLocal(normalizePattern(pattern))
-  }, [pattern?.steps, pattern?.rows?.length, pattern?.lengthBeats])
+  }, [pattern])
 
   // Keep the live pattern ref in sync so the scheduler reads fresh data
   useEffect(() => {

@@ -1198,6 +1198,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   // Handle canvas click - just open piano roll
   const handleCanvasClick = (e) => {
+    // Prevent interactions while project is loading
+    if (isRestoring) return
+    
     if (resizing) return
     if (dragging) return
     if (resizeClickSuppressRef.current) {
@@ -1301,6 +1304,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   }
 
   const handleCanvasMouseDown = (e) => {
+    // Prevent interactions while project is loading
+    if (isRestoring) return
+    
     const rect = canvasRef.current.getBoundingClientRect()
     const y = e.clientY - rect.top
     const x = e.clientX - rect.left
