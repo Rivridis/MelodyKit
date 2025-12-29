@@ -1605,9 +1605,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
       // Check if any tracks are using VST mode
       const hasVSTTracks = tracks.some((t) => trackVSTMode?.[t.id])
-      const hasSF2Tracks = tracks.some((t) => !trackVSTMode?.[t.id] && (t.type !== 'audio' && t.type !== 'beat'))
+      const hasSF2Tracks = tracks.some((t) => !trackVSTMode?.[t.id] && t.type !== 'audio' && t.type !== 'beat')
+      const hasBeatTracks = tracks.some((t) => t.type === 'beat')
 
-      if (hasVSTTracks && !hasSF2Tracks) {
+      if (hasVSTTracks && !hasSF2Tracks && !hasBeatTracks) {
         // Pure VST export - use backend rendering only
         setIsRecording(true)
         
@@ -1667,8 +1668,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         return
       }
 
-      if (hasVSTTracks && hasSF2Tracks) {
-        // Hybrid export: render VST to temp file, then mix with SF2 in realtime
+      if (hasVSTTracks && (hasSF2Tracks || hasBeatTracks)) {
+        // Hybrid export: render VST to temp file, then mix with SF2/beats in realtime
         setIsRecording(true)
         
         // Step 1: Collect and render VST notes to temporary file
