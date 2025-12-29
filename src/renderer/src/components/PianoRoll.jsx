@@ -774,8 +774,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         offscreenDesiredRef.current = false
         offscreenReadyRef.current = false
         // Ensure 2D backing store and draw on main thread
-        htmlCanvas.width = CANVAS_WIDTH * dpr
-        htmlCanvas.height = CANVAS_HEIGHT * dpr
+        // Only resize if canvas hasn't been transferred (check if getContext still works)
+        try {
+          if (htmlCanvas.getContext) {
+            htmlCanvas.width = CANVAS_WIDTH * dpr
+            htmlCanvas.height = CANVAS_HEIGHT * dpr
+          }
+        } catch (e) {
+          console.warn('Cannot resize canvas (already transferred):', e.message)
+        }
         drawMainCanvas()
         if (reason) console.warn('Offscreen path disabled:', reason)
       }

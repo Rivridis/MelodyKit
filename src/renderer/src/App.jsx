@@ -45,6 +45,7 @@ function App() {
   const [trackVolumes, setTrackVolumes] = useState({}) // { trackId: volume (0-150) }
   const [trackBeats, setTrackBeats] = useState({}) // { trackId: { steps, rows: [{id,name,filePath,fileUrl,steps:boolean[]}]} }
   const [trackOffsets, setTrackOffsets] = useState({}) // { trackId: startBeat } - timeline offset for all tracks
+  const [trackLengths, setTrackLengths] = useState({}) // { trackId: lengthBeats } - manual length for MIDI/audio tracks
   const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
@@ -53,6 +54,7 @@ function App() {
   const [currentProjectPath, setCurrentProjectPath] = useState(null)
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
   const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
+  const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
 
@@ -190,11 +192,46 @@ function App() {
 
   // Update notes for a track
   const handleNotesChange = (trackId, notes) => {
+    console.log(`[Notes] Track ${trackId} updated with ${notes.length} notes, max position:`, 
+      notes.length > 0 ? Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0))) : 0)
     setTrackNotes(prev => ({ ...prev, [trackId]: notes }))
+    
+    // Auto-update track length based on furthest note
+    if (notes.length > 0) {
+      const maxPos = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
+      setTrackLengths(prev => ({ ...prev, [trackId]: Math.ceil(maxPos) }))
+    }
+    
     // Update note count in track
     setTracks(tracks.map(t => 
       t.id === trackId ? { ...t, noteCount: notes.length } : t
     ))
+  }
+  
+  // Trigger immediate save (when closing piano roll, etc.)
+  const triggerImmediateSave = async () => {
+    if (!currentProjectPath || isRestoring || isSavingRef.current) return
+    
+    // Wait a tick to ensure all state updates are committed
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    try {
+      isSavingRef.current = true
+      setIsAutosaving(true)
+      const project = await buildProject()
+      const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
+      if (r?.ok) {
+        console.log('[Immediate Save] ✓ Saved')
+        lastSaveDataRef.current = JSON.stringify(project)
+      } else {
+        console.error('[Immediate Save] Failed:', r?.error)
+      }
+    } catch (e) {
+      console.error('[Immediate Save] Error:', e)
+    } finally {
+      isSavingRef.current = false
+      setTimeout(() => setIsAutosaving(false), 500) // Show indicator briefly
+    }
   }
 
   // Update instrument for a track
@@ -265,6 +302,32 @@ function App() {
     
     console.log('Final trackVSTPresets keys:', Object.keys(trackVSTPresets))
     console.log('Final trackVSTPresets sizes:', Object.entries(trackVSTPresets).map(([k,v]) => `${k}: ${v?.length || 0} bytes`))
+    console.log('[Save] trackBeats with lengths:', Object.entries(trackBeats).map(([k,v]) => `${k}: ${v.lengthBeats || 'no length'} beats`))
+    console.log('[Save] trackNotes counts:', Object.entries(trackNotes).map(([k,v]) => `${k}: ${v.length} notes, max pos: ${v.length > 0 ? Math.max(...v.map(n => (n.start || 0) + (n.duration || 0))) : 0}`))
+    console.log('[Save] trackOffsets:', trackOffsets)
+
+    // Recalculate trackLengths from current notes to ensure it's up-to-date
+    const currentTrackLengths = { ...trackLengths }
+    tracks.forEach(t => {
+      if (t.type === 'midi' || (!t.type && t.type !== 'beat' && t.type !== 'audio')) {
+        const notes = trackNotes[t.id]
+        if (notes && notes.length > 0) {
+          const maxPos = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
+          currentTrackLengths[t.id] = Math.ceil(maxPos)
+        }
+      }
+    })
+    console.log('[Save] Calculated trackLengths:', currentTrackLengths)
+    console.log('[Save] Detailed track info:')
+    tracks.forEach(t => {
+      if (t.type !== 'beat' && t.type !== 'audio') {
+        const notes = trackNotes[t.id] || []
+        console.log(`  Track ${t.id} (${t.name}): ${notes.length} notes, length: ${currentTrackLengths[t.id] || 'none'}`)
+        if (notes.length > 0) {
+          console.log(`    Note positions:`, notes.map(n => `${n.start?.toFixed(2)}-${((n.start || 0) + (n.duration || 0)).toFixed(2)}`))
+        }
+      }
+    })
 
     return {
       app: 'MelodyKit',
@@ -292,6 +355,7 @@ function App() {
       trackInstruments,
       trackVolumes,
       trackOffsets,
+      trackLengths: currentTrackLengths,
       trackVSTMode,
       trackVSTPlugins,
       trackVSTPresets
@@ -359,6 +423,7 @@ function App() {
       const nextTrackInstruments = (p.trackInstruments && typeof p.trackInstruments === 'object') ? p.trackInstruments : {}
       const nextTrackVolumes = (p.trackVolumes && typeof p.trackVolumes === 'object') ? p.trackVolumes : {}
       const nextTrackOffsets = (p.trackOffsets && typeof p.trackOffsets === 'object') ? p.trackOffsets : {}
+      const nextTrackLengths = (p.trackLengths && typeof p.trackLengths === 'object') ? p.trackLengths : {}
       const nextTrackVSTMode = (p.trackVSTMode && typeof p.trackVSTMode === 'object') ? p.trackVSTMode : {}
       const nextTrackVSTPlugins = (p.trackVSTPlugins && typeof p.trackVSTPlugins === 'object') ? p.trackVSTPlugins : {}
       const nextTrackVSTPresets = (p.trackVSTPresets && typeof p.trackVSTPresets === 'object') ? p.trackVSTPresets : {}
@@ -371,7 +436,10 @@ function App() {
       })
 
       console.log('[Load] nextTrackOffsets:', nextTrackOffsets)
+      console.log('[Load] nextTrackOffsets details:', Object.entries(nextTrackOffsets).map(([k,v]) => `${k}: ${v} beats`))
       console.log('[Load] nextTrackBeats:', Object.keys(nextTrackBeats), nextTrackBeats)
+      console.log('[Load] nextTrackNotes counts:', Object.entries(nextTrackNotes).map(([k,v]) => `${k}: ${v?.length || 0} notes, max pos: ${v?.length > 0 ? Math.max(...v.map(n => (n.start || 0) + (n.duration || 0))) : 0}`))
+      console.log('[Load] nextTrackLengths:', nextTrackLengths)
 
       // Recompute noteCount for each track
       const recomputedTracks = nextTracks.map(t => ({
@@ -399,6 +467,27 @@ function App() {
     acc[t.id] = typeof nextTrackOffsets[t.id] === 'number' ? nextTrackOffsets[t.id] : 0
     return acc
   }, {}))
+  // Set manual track lengths (for MIDI/audio tracks)
+  setTrackLengths(nextTrackLengths)
+  
+  // Recalculate missing trackLengths from notes
+  const calculatedLengths = {}
+  recomputedTracks.forEach(t => {
+    if (t.type === 'midi' || (!t.type && t.type !== 'beat' && t.type !== 'audio')) {
+      const notes = nextTrackNotes[t.id]
+      if (notes && notes.length > 0) {
+        const maxPos = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
+        calculatedLengths[t.id] = Math.ceil(maxPos)
+      }
+    }
+  })
+  
+  // Merge calculated lengths with loaded lengths (loaded takes priority)
+  setTrackLengths(prev => ({ ...calculatedLengths, ...nextTrackLengths }))
+  console.log('[Load] Final trackLengths:', { ...calculatedLengths, ...nextTrackLengths })
+  console.log('[Load] Calculated from notes:', calculatedLengths)
+  console.log('[Load] Loaded from file:', nextTrackLengths)
+  
   // default VST mode to false for any missing track ids
   setTrackVSTMode(recomputedTracks.reduce((acc, t) => {
     acc[t.id] = typeof nextTrackVSTMode[t.id] === 'boolean' ? nextTrackVSTMode[t.id] : false
@@ -489,45 +578,65 @@ function App() {
     }
   }
 
-  // Autosave to current file (debounced) whenever state changes and a project path exists
-  useEffect(() => {
-    if (!currentProjectPath || isRestoring) return
-    const id = setTimeout(async () => {
-      try {
-        const project = await buildProject()
-        const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
-        if (!r?.ok) console.error('Autosave failed:', r?.error)
-        else console.log('[Autosave] ✓ Saved (debounced)')
-      } catch (e) {
-        console.error('Autosave error:', e)
-      }
-    }, 500) // debounce 500ms
-    return () => clearTimeout(id)
-  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackVSTMode, trackVSTPlugins, bpm, gridWidth, zoom, currentProjectPath])
-
-  // Periodic autosave for VST tracks (parameters change outside React state)
+  // Unified autosave system - triggers save when state changes
+  const autosaveTimerRef = useRef(null)
+  const lastSaveDataRef = useRef(null)
+  const isSavingRef = useRef(false)
+  
   useEffect(() => {
     if (!currentProjectPath || isRestoring) return
     
-    // Check if any VST tracks exist
-    const hasVSTTracks = Object.keys(trackVSTPlugins).some(trackId => trackVSTMode[trackId] && trackVSTPlugins[trackId])
-    if (!hasVSTTracks) return
+    console.log('[Autosave] Effect triggered - trackOffsets:', trackOffsets)
     
-    // Save every 5 seconds when VST tracks are active
-    const interval = setInterval(async () => {
-      try {
-        console.log('[Periodic VST autosave] Capturing VST states...')
-        const project = await buildProject()
-        const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
-        if (!r?.ok) console.error('Periodic VST autosave failed:', r?.error)
-        else console.log('[Periodic VST autosave] ✓ Saved')
-      } catch (e) {
-        console.error('Periodic VST autosave error:', e)
+    // Clear existing timer
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current)
+    }
+    
+    // Debounced save
+    autosaveTimerRef.current = setTimeout(async () => {
+      // Skip if already saving
+      if (isSavingRef.current) {
+        console.log('[Autosave] Save already in progress, skipping')
+        return
       }
-    }, 5000) // every 5 seconds
+      
+      try {
+        isSavingRef.current = true
+        setIsAutosaving(true)
+        const project = await buildProject()
+        
+        // Compare the actual project data, not the state values
+        const currentData = JSON.stringify(project)
+        
+        // Skip save if nothing changed
+        if (lastSaveDataRef.current === currentData) {
+          console.log('[Autosave] No changes detected, skipping save')
+          return
+        }
+        
+        const r = await window.api?.saveProjectToPath?.(project, currentProjectPath)
+        if (!r?.ok) {
+          console.error('[Autosave] Failed:', r?.error)
+        } else {
+          console.log('[Autosave] ✓ Saved successfully to:', currentProjectPath)
+          console.log('[Autosave] Saved tracks:', tracks.map(t => `${t.id}:${t.name}`))
+          lastSaveDataRef.current = currentData
+        }
+      } catch (e) {
+        console.error('[Autosave] Error:', e)
+      } finally {
+        isSavingRef.current = false
+        setTimeout(() => setIsAutosaving(false), 500) // Show indicator briefly
+      }
+    }, 1500) // debounce 1.5s for responsive autosave
     
-    return () => clearInterval(interval)
-  }, [currentProjectPath, trackVSTPlugins, trackVSTMode, isRestoring])
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+      }
+    }
+  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackVSTMode, trackVSTPlugins, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
 
   const timelineRef = useRef(null)
 
@@ -559,6 +668,7 @@ function App() {
         onImportAudio={handleImportAudio}
         currentProjectPath={currentProjectPath}
         loading={isLoading || isRestoring}
+        isAutosaving={isAutosaving}
       />
       <div className="flex-1 min-h-0 min-w-0 flex">
         <Sidebar
@@ -569,6 +679,7 @@ function App() {
           onAddBeatTrack={handleAddBeatTrack}
           onDeleteTrack={handleDeleteTrack}
           onRenameTrack={handleRenameTrack}
+          isRestoring={isRestoring}
         />
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">
           {selectedTrack ? (
@@ -577,7 +688,7 @@ function App() {
                 trackId={selectedTrack.id}
                 pattern={trackBeats[selectedTrack.id] || { steps: 16, rows: [] }}
                 onChange={(p) => setTrackBeats((prev) => ({ ...prev, [selectedTrack.id]: p }))}
-                onBack={() => setSelectedTrackId(null)}
+                onBack={() => { setSelectedTrackId(null); triggerImmediateSave(); }}
                 bpm={bpm}
               />
             ) : (
@@ -587,7 +698,7 @@ function App() {
                 trackColor={selectedTrack.color}
                 notes={currentNotes}
                 onNotesChange={(notes) => handleNotesChange(selectedTrack.id, notes)}
-                onBack={() => setSelectedTrackId(null)}
+                onBack={() => { setSelectedTrackId(null); triggerImmediateSave(); }}
                 gridWidth={gridWidth}
                 setGridWidth={setGridWidth}
                 bpm={bpm}
@@ -613,6 +724,8 @@ function App() {
               setTrackVolumes={setTrackVolumes}
               trackOffsets={trackOffsets}
               setTrackOffsets={setTrackOffsets}
+              trackLengths={trackLengths}
+              setTrackLengths={setTrackLengths}
               trackVSTMode={trackVSTMode}
               onSelectTrack={setSelectedTrackId}
               onAddTrack={handleAddTrack}

@@ -5,7 +5,7 @@ const TRACK_COLORS = [
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 ]
 
-function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack }) {
+function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack, isRestoring }) {
   const [editingTrackId, setEditingTrackId] = useState(null)
   const [editName, setEditName] = useState('')
 
@@ -46,11 +46,13 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
         <h2 className="text-white font-semibold text-lg mb-3">Tracks</h2>
         <button
           onClick={handleAddTrack}
+          disabled={isRestoring}
           title="Add Track"
           aria-label="Add Track"
           className="relative inline-flex items-center justify-center h-9 w-full px-10 rounded-md text-sm font-medium text-white
                      bg-zinc-800 hover:bg-zinc-700 ring-1 ring-inset ring-zinc-700
-                     shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors"
+                     shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors
+                     disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-zinc-800"
         >
           <span
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2
@@ -67,11 +69,13 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
         </button>
         <button
           onClick={handleAddBeat}
+          disabled={isRestoring}
           title="Add Beat Track"
           aria-label="Add Beat Track"
           className="mt-2 relative inline-flex items-center justify-center h-9 w-full px-10 rounded-md text-sm font-medium text-white
                      bg-zinc-800 hover:bg-zinc-700 ring-1 ring-inset ring-zinc-700
-                     shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors"
+                     shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors
+                     disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-zinc-800"
         >
           <span
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2

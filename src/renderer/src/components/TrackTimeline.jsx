@@ -64,7 +64,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange, isRestoring }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange, isRestoring }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -733,11 +733,22 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           // Find the last note end position (relative to track start)
           const ends = notes.map(n => (n.start || 0) + (n.duration || 0))
           const lastNoteEnd = Math.max(...ends)
-          // Region starts at track offset (beat 0 of track) and extends to last note
+          
+          // Use manual length if set, otherwise use calculated length from notes
+          let duration = lastNoteEnd
+          if (trackLengths && typeof trackLengths[track.id] === 'number') {
+            duration = Math.max(lastNoteEnd, trackLengths[track.id])
+          }
+          // If actively resizing this MIDI track, show live length
+          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
+            duration = Math.max(lastNoteEnd, resizing.currentLen)
+          }
+          
+          // Region starts at track offset (beat 0 of track) and extends to duration
           region = { 
             start: trackOffset, 
-            duration: lastNoteEnd, 
-            end: trackOffset + lastNoteEnd 
+            duration: duration, 
+            end: trackOffset + duration 
           }
         }
       }
@@ -1127,7 +1138,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   useEffect(() => {
     const handleGlobalMouseUp = () => {
       if (resizing) {
-        const { trackId, currentLen, startLen } = resizing
+        const { trackId, trackType, currentLen, startLen } = resizing
         const raw = Number(currentLen || startLen) || 4
         const bars = Math.max(1, Math.round(raw / 4))
         const commitLen = bars * 4
@@ -1135,10 +1146,18 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         if (commitLen !== startLen) {
           resizeClickSuppressRef.current = true
         }
-        setTrackBeats?.((prev) => {
-          const p = prev?.[trackId] || { steps: 16, rows: [] }
-          return { ...prev, [trackId]: { ...p, lengthBeats: commitLen } }
-        })
+        
+        if (trackType === 'beat') {
+          // Update beat pattern length
+          setTrackBeats?.((prev) => {
+            const p = prev?.[trackId] || { steps: 16, rows: [] }
+            return { ...prev, [trackId]: { ...p, lengthBeats: commitLen } }
+          })
+        } else {
+          // Update MIDI track manual length
+          setTrackLengths?.((prev) => ({ ...prev, [trackId]: commitLen }))
+        }
+        
         setResizing(null)
       }
       
@@ -1152,8 +1171,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           dragClickSuppressRef.current = true
         }
         // Update trackOffsets for all track types (unified approach)
+        console.log(`[TrackTimeline] Setting trackOffset for track ${trackId} to ${commitStart}`)
         setTrackOffsets?.((prev) => {
-          return { ...prev, [trackId]: commitStart }
+          const newOffsets = { ...prev, [trackId]: commitStart }
+          console.log('[TrackTimeline] New trackOffsets:', newOffsets)
+          return newOffsets
         })
         setDragging(null)
         if (canvasRef.current) {
@@ -1345,13 +1367,26 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         // Find the last note end position (relative to track start)
         const ends = notes.map(n => (n.start || 0) + (n.duration || 0))
         const lastNoteEnd = Math.max(...ends)
+        
+        // Use manual length if set and greater than note extent
         beats = lastNoteEnd
+        if (trackLengths && typeof trackLengths[track.id] === 'number') {
+          beats = Math.max(lastNoteEnd, trackLengths[track.id])
+        }
+        
         regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-        regionWidth = lastNoteEnd * beatWidth
+        regionWidth = beats * beatWidth
+        regionY = trackIndex * TRACK_HEIGHT + 12
+        regionHeight = TRACK_HEIGHT - 24
+      } else if (trackLengths && typeof trackLengths[track.id] === 'number') {
+        // No notes but has manual length - show empty region
+        beats = trackLengths[track.id]
+        regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
+        regionWidth = beats * beatWidth
         regionY = trackIndex * TRACK_HEIGHT + 12
         regionHeight = TRACK_HEIGHT - 24
       } else {
-        return // No notes to interact with
+        return // No notes and no manual length to interact with
       }
     }
     
@@ -1361,7 +1396,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     
     if (track.type === 'beat' && inY && nearRight) {
       // Start resizing (beat tracks only)
-      setResizing({ trackId: track.id, startX: x, startLen: beats, currentLen: beats })
+      setResizing({ trackId: track.id, trackType: track.type, startX: x, startLen: beats, currentLen: beats })
       e.preventDefault()
       e.stopPropagation()
     } else if (inRegion) {
