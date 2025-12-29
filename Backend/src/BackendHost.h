@@ -11,6 +11,7 @@
 
 // Forward declaration
 class PluginEditorWindow;
+class GainAudioCallback;
 
 // MIDI note event for rendering
 struct MidiNoteEvent {
@@ -44,6 +45,9 @@ public:
 
     // Sends all-notes-off for a specific track, or all tracks if trackId is empty
     void allNotesOff(const juce::String& trackId = "");
+    
+    // Set track volume via MIDI CC 7 (0-127, where 100 is default)
+    bool setTrackVolume(const juce::String& trackId, int volume, int channel = 1);
 
     // Opens the plugin's native editor window (non-blocking)
     bool openEditor(const juce::String& trackId, juce::String& errorMessage);
@@ -84,7 +88,9 @@ private:
     struct TrackState {
         std::unique_ptr<juce::AudioPluginInstance> plugin;
         std::unique_ptr<juce::AudioProcessorPlayer> player;
+        std::unique_ptr<GainAudioCallback> gainCallback;
         std::unique_ptr<PluginEditorWindow> editorWindow;
+        float gainLinear = 1.0f; // Linear gain multiplier (0.0 to ~2.0)
         
         // Track active timers for scheduled note-offs
         struct NoteOffTimer {

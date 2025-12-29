@@ -3,6 +3,48 @@
 #include <juce_core/juce_core.h>
 #include <iostream>
 
+// Custom audio callback that wraps AudioProcessorPlayer and applies gain
+class GainAudioCallback : public juce::AudioIODeviceCallback {
+public:
+    GainAudioCallback(juce::AudioProcessorPlayer* player, float* gainPtr)
+        : player(player), gainLinearPtr(gainPtr) {}
+    
+    void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
+                                          int numInputChannels,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& context) override {
+        // Let the player process audio
+        player->audioDeviceIOCallbackWithContext(inputChannelData, numInputChannels,
+                                                  outputChannelData, numOutputChannels,
+                                                  numSamples, context);
+        
+        // Apply gain to output
+        const float gain = *gainLinearPtr;
+        if (gain != 1.0f) {
+            for (int ch = 0; ch < numOutputChannels; ++ch) {
+                if (outputChannelData[ch]) {
+                    juce::FloatVectorOperations::multiply(outputChannelData[ch], gain, numSamples);
+                }
+            }
+        }
+    }
+    
+    void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
+        player->audioDeviceAboutToStart(device);
+    }
+    
+    void audioDeviceStopped() override {
+        player->audioDeviceStopped();
+    }
+    
+private:
+    juce::AudioProcessorPlayer* player;
+    float* gainLinearPtr;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GainAudioCallback)
+};
+
 // Simple window to host the plugin's editor
 class PluginEditorWindow : public juce::DocumentWindow {
 public:
@@ -58,8 +100,10 @@ BackendHost::~BackendHost() {
             track.editorWindow->setVisible(false);
             track.editorWindow.reset();
         }
+        if (track.gainCallback) {
+            deviceManager.removeAudioCallback(track.gainCallback.get());
+        }
         if (track.player) {
-            deviceManager.removeAudioCallback(track.player.get());
             track.player->setProcessor(nullptr);
         }
     }
@@ -153,9 +197,13 @@ bool BackendHost::loadPlugin(const juce::String& trackId, const juce::File& file
     track.player = std::make_unique<juce::AudioProcessorPlayer>();
     track.player->setProcessor(track.plugin.get());
     track.player->getMidiMessageCollector().reset(sr);
+    track.gainLinear = 1.0f; // Default unity gain
     
-    // Add this player as an audio callback
-    deviceManager.addAudioCallback(track.player.get());
+    // Create gain wrapper callback
+    track.gainCallback = std::make_unique<GainAudioCallback>(track.player.get(), &track.gainLinear);
+    
+    // Add the gain callback as an audio callback (not the player directly)
+    deviceManager.addAudioCallback(track.gainCallback.get());
 
     emit("EVENT LOADED " + trackId + " " + file.getFullPathName());
     return true;
@@ -172,8 +220,11 @@ void BackendHost::unloadPlugin(const juce::String& trackId) {
         it->second.editorWindow.reset();
     }
     
+    if (it->second.gainCallback) {
+        deviceManager.removeAudioCallback(it->second.gainCallback.get());
+    }
+    
     if (it->second.player) {
-        deviceManager.removeAudioCallback(it->second.player.get());
         it->second.player->setProcessor(nullptr);
     }
     
@@ -278,6 +329,26 @@ void BackendHost::allNotesOff(const juce::String& trackId) {
             it->second.player->getMidiMessageCollector().addMessageToQueue(msg);
         }
     }
+}
+
+bool BackendHost::setTrackVolume(const juce::String& trackId, int volume, int channel) {
+    const juce::ScopedLock sl(tracksLock);
+    
+    auto it = tracks.find(trackId);
+    if (it == tracks.end() || !it->second.player) return false;
+    
+    // Clamp volume to MIDI range 0-127
+    volume = juce::jlimit(0, 127, volume);
+    
+    // Convert MIDI 0-127 to linear gain (0.0 to 2.0)
+    // MIDI 0 = silent, 64 = unity (1.0), 127 = +6dB (~2.0)
+    it->second.gainLinear = (volume / 64.0f);
+    
+    // Also send MIDI CC 7 for plugins that support it
+    juce::MidiMessage volumeMsg = juce::MidiMessage::controllerEvent(channel, 7, volume);
+    it->second.player->getMidiMessageCollector().addMessageToQueue(volumeMsg);
+    
+    return true;
 }
 
 bool BackendHost::openEditor(const juce::String& trackId, juce::String& errorMessage) {
@@ -492,6 +563,12 @@ bool BackendHost::renderToWav(const std::vector<MidiNoteEvent>& notes,
         plugin->setNonRealtime(false);
         plugin->releaseResources();
         plugin->prepareToPlay(getSampleRate(), getBlockSize());
+        
+        // Apply track gain to the rendered audio
+        const float trackGain = trackIt->second.gainLinear;
+        if (trackGain != 1.0f) {
+            trackBuffer.applyGain(trackGain);
+        }
         
         // Mix track buffer into main render buffer
         for (int ch = 0; ch < numChannels; ++ch) {

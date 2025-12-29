@@ -305,26 +305,38 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     })
   }, [tracks])
 
-  // Apply volume changes to per-track gains (and pre-gain)
+  // Apply volume changes to per-track gains (and pre-gain) and VST tracks
   useEffect(() => {
     const map = perTrackGainsRef.current
     const preMap = perTrackPreGainsRef.current
     if (!map) return
     if (!trackVolumes) return
     Object.entries(trackVolumes).forEach(([trackId, vol]) => {
+      // Update Web Audio gain nodes for SF2/audio tracks
       const g = map[trackId]
       if (g) {
-        const v = Math.max(0, Math.min(150, Number(vol) || 100)) / 100
+        const v = Math.max(0, Math.min(150, Number(vol) || 80)) / 100
         try { g.gain.setValueAtTime(v, audioContextRef.current.currentTime) } catch { g.gain.value = v }
       }
       const pre = preMap?.[trackId]
       if (pre) {
-        const v = Math.max(0, Math.min(150, Number(vol) || 100)) / 100
+        const v = Math.max(0, Math.min(150, Number(vol) || 80)) / 100
         const preTarget = 1.8 * v
         try { pre.gain.setValueAtTime(preTarget, audioContextRef.current.currentTime) } catch { pre.gain.value = preTarget }
       }
+      
+      // Update VST track volume via MIDI CC
+      const isVST = trackVSTMode?.[trackId]
+      if (isVST) {
+        // Map 0-150% to MIDI 0-127 range, then reduce by 50% for VST loudness
+        const volPercent = Math.max(0, Math.min(150, Number(vol) || 100))
+        const midiVolume = Math.round((volPercent / 150) * 127 * 0.5)
+        window.api.backend.setVolume(String(trackId), midiVolume, 1).catch(err => {
+          console.error(`Failed to set VST volume for track ${trackId}:`, err)
+        })
+      }
     })
-  }, [trackVolumes])
+  }, [trackVolumes, trackVSTMode])
 
   // Decode imported audio clips for this AudioContext
   useEffect(() => {
@@ -820,10 +832,15 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       try {
         console.log(`Using VST backend for track ${trackId}`)
         const midiNote = noteNameToMidi(noteName)
-        // Scale velocity by track volume
-        const vol = Math.max(50, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
-        const baseVelocity = 0.8
-        const velocity = baseVelocity * (vol / 100)
+        
+        // Send volume CC message before the note to ensure it's applied
+        // Map 0-150% volume to MIDI 0-127 range, then reduce by 50% for VST loudness
+        const volPercent = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+        const midiVolume = Math.round((volPercent / 150) * 127 * 0.5)
+        window.api.backend.setVolume(String(trackId), midiVolume, 1).catch(() => {})
+        
+        // Use constant velocity, let CC 7 handle volume
+        const velocity = 0.8
         playBackendNote(trackId, midiNote, velocity, Math.floor(duration * 1000), 1)
         return
       } catch (error) {
@@ -837,7 +854,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       try {
   console.log(`Using SF2 (spessasynth_lib) for track ${trackId}`)
         // Scale velocity by track volume so changes are audible even if sampler routes to destination directly
-        const vol = Math.max(50, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+        const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
         const baseVelocity = 80
         const velocity = Math.max(1, Math.min(127, Math.round(baseVelocity * (vol / 100))))
         playSf2Note(loadedInstrument.data, noteName, duration, velocity)
@@ -1609,12 +1626,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             const durationBeats = note.duration || 1
             const midiNote = noteNameToMidi(note.note)
             
+            // Apply track volume to velocity
+            const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+            const baseVelocity = 0.8
+            const velocity = baseVelocity * (vol / 100)
+            
             allNotes.push({
               trackId: String(trackId),
               startTime: startBeat * beatDuration,
               duration: durationBeats * beatDuration,
               midiNote: midiNote,
-              velocity: 0.8,
+              velocity: velocity,
               channel: 1
             })
           })
@@ -1664,12 +1686,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             const durationBeats = note.duration || 1
             const midiNote = noteNameToMidi(note.note)
             
+            // Apply track volume to velocity
+            const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+            const baseVelocity = 0.8
+            const velocity = baseVelocity * (vol / 100)
+            
             vstNotes.push({
               trackId: String(trackId),
               startTime: startBeat * beatDuration,
               duration: durationBeats * beatDuration,
               midiNote: midiNote,
-              velocity: 0.8,
+              velocity: velocity,
               channel: 1
             })
           })
@@ -2065,7 +2092,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                     >
                       <input
                         type="range"
-                        min={50}
+                        min={0}
                         max={150}
                         step={1}
                         value={value}

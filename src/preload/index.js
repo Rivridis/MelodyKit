@@ -35,6 +35,8 @@ api.backend = {
   scanVSTs: () => ipcRenderer.invoke('backend:scan-vsts'),
   // send a live note on/off pair to the plugin for a specific track
   noteOn: (opts) => ipcRenderer.invoke('backend:note-on', opts),
+  // set track volume via MIDI CC (0-127, where 100 is default)
+  setVolume: (trackId, volume, channel) => ipcRenderer.invoke('backend:set-volume', { trackId, volume, channel }),
   // optional helpers
   panic: (trackId) => ipcRenderer.invoke('backend:panic', trackId),
   status: () => ipcRenderer.invoke('backend:status'),

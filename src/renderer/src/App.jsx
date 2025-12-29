@@ -16,7 +16,7 @@ function App() {
   const [selectedTrackId, setSelectedTrackId] = useState(null)
   const [trackNotes, setTrackNotes] = useState({}) // { trackId: [notes] }
   const [trackInstruments, setTrackInstruments] = useState({}) // { trackId: instrument }
-  const [trackVolumes, setTrackVolumes] = useState({}) // { trackId: volume (50-150) }
+  const [trackVolumes, setTrackVolumes] = useState({}) // { trackId: volume (0-150) }
   const [trackBeats, setTrackBeats] = useState({}) // { trackId: { steps, rows: [{id,name,filePath,fileUrl,steps:boolean[]}]} }
   const [trackOffsets, setTrackOffsets] = useState({}) // { trackId: startBeat } - timeline offset for all tracks
   const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend

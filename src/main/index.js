@@ -227,6 +227,18 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('backend:set-volume', async (event, { trackId, volume, channel = 1 }) => {
+    try {
+      if (!trackId) {
+        return { ok: false, error: 'missing-track-id' }
+      }
+      const vol = Math.max(0, Math.min(127, Math.round(volume)))
+      return sendToBackend(`SET_VOLUME ${trackId} ${vol} ${channel}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('backend:status', async () => {
     try {
       return sendToBackend('STATUS')

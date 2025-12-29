@@ -27,6 +27,14 @@ export async function loadVST(trackId, pluginPath) {
       return false
     }
     backendReady = true
+    
+    // Set initial volume to 32 (50% of center 64 for reduced VST loudness)
+    try {
+      await window.api.backend.setVolume(String(trackId), 32, 1)
+    } catch (e) {
+      console.warn(`Failed to set initial volume for track ${trackId}:`, e)
+    }
+    
     return true
   } catch (e) {
     console.error(`Error loading VST for track ${trackId}:`, e)

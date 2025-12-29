@@ -86,6 +86,28 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         emit("EVENT PANIC " + (trackId.isEmpty() ? "ALL" : trackId));
         return true;
     }
+    
+    if (command == "SET_VOLUME" || command == "VOLUME") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR VOLUME missing-track-id-or-volume");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const int volume = tokens[1].getIntValue();
+        const int channel = tokens.size() > 2 ? tokens[2].getIntValue() : 1;
+        
+        if (!ctx.host.setTrackVolume(trackId, volume, channel)) {
+            emit("ERROR VOLUME " + trackId + " no-plugin-loaded");
+        } else {
+            emit("EVENT VOLUME " + trackId + " " + juce::String(volume));
+        }
+        return true;
+    }
 
     if (command == "STATUS") {
         emit("EVENT STATUS rate=" + juce::String(ctx.host.getSampleRate()) +
