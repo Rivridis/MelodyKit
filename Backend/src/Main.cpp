@@ -285,30 +285,29 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
     }
 
     if (command == "RENDER_WAV") {
-        // Format: RENDER_WAV <outputPath> <sampleRate> <bitDepth> <base64EncodedNoteData>
-        // Note data is base64-encoded JSON array of notes
+        // Format: RENDER_WAV <outputPath> <sampleRate> <bitDepth> <base64EncodedPayload>
+        // Payload: JSON object { notes: [...], beats?: [...], audio?: [...] }
         juce::StringArray tokens;
         tokens.addTokens(args, " ", "\"'");
         tokens.removeEmptyStrings();
         
         if (tokens.size() < 4) {
-            emit("ERROR RENDER_WAV missing-arguments (need outputPath sampleRate bitDepth noteData)");
+            emit("ERROR RENDER_WAV missing-arguments (need outputPath sampleRate bitDepth payload)");
             return true;
         }
         
         const juce::String outputPath = tokens[0].unquoted();
         const double sampleRate = tokens[1].getDoubleValue();
         const int bitDepth = tokens[2].getIntValue();
-        const juce::String noteDataB64 = tokens[3];
+        const juce::String payloadB64 = tokens[3];
         
-        // Decode base64 note data
+        // Decode base64 payload
         juce::MemoryOutputStream decodedStream;
-        if (!juce::Base64::convertFromBase64(decodedStream, noteDataB64)) {
-            emit("ERROR RENDER_WAV failed-to-decode-note-data");
+        if (!juce::Base64::convertFromBase64(decodedStream, payloadB64)) {
+            emit("ERROR RENDER_WAV failed-to-decode-payload");
             return true;
         }
         
-        // Parse JSON note array
         juce::String jsonStr = decodedStream.toString();
         juce::var jsonData;
         try {
@@ -317,37 +316,76 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
             emit("ERROR RENDER_WAV failed-to-parse-json");
             return true;
         }
-        
-        if (!jsonData.isArray()) {
-            emit("ERROR RENDER_WAV note-data-not-array");
-            return true;
-        }
-        
-        // Build note event vector
+
         std::vector<MidiNoteEvent> notes;
-        const juce::Array<juce::var>* noteArray = jsonData.getArray();
-        
-        for (int i = 0; i < noteArray->size(); ++i) {
-            const juce::var& noteObj = noteArray->getReference(i);
-            if (!noteObj.isObject()) continue;
-            
-            juce::String trackId = noteObj.getProperty("trackId", "").toString();
-            double startTime = noteObj.getProperty("startTime", 0.0);
-            double duration = noteObj.getProperty("duration", 0.5);
-            int midiNote = noteObj.getProperty("midiNote", 60);
-            float velocity = (float)noteObj.getProperty("velocity", 0.8);
-            int channel = noteObj.getProperty("channel", 1);
-            
-            notes.emplace_back(trackId, startTime, duration, midiNote, velocity, channel);
-        }
-        
-        if (notes.empty()) {
-            emit("ERROR RENDER_WAV no-valid-notes");
+        std::vector<BeatRenderEvent> beatEvents;
+        std::vector<AudioClipRenderEvent> audioEvents;
+
+        auto parseNotesArray = [&](const juce::Array<juce::var>* arr) {
+            if (!arr) return;
+            for (int i = 0; i < arr->size(); ++i) {
+                const juce::var& noteObj = arr->getReference(i);
+                if (!noteObj.isObject()) continue;
+
+                juce::String trackId = noteObj.getProperty("trackId", "").toString();
+                double startTime = noteObj.getProperty("startTime", 0.0);
+                double duration = noteObj.getProperty("duration", 0.5);
+                int midiNote = noteObj.getProperty("midiNote", 60);
+                float velocity = (float)noteObj.getProperty("velocity", 0.8);
+                int channel = noteObj.getProperty("channel", 1);
+
+                notes.emplace_back(trackId, startTime, duration, midiNote, velocity, channel);
+            }
+        };
+
+        auto parseBeatsArray = [&](const juce::Array<juce::var>* arr) {
+            if (!arr) return;
+            for (int i = 0; i < arr->size(); ++i) {
+                const juce::var& beatObj = arr->getReference(i);
+                if (!beatObj.isObject()) continue;
+                BeatRenderEvent ev;
+                ev.trackId = beatObj.getProperty("trackId", "").toString();
+                ev.rowId = beatObj.getProperty("rowId", "").toString();
+                ev.startTimeSeconds = beatObj.getProperty("startTime", 0.0);
+                ev.gainLinear = (float)beatObj.getProperty("gain", 1.0);
+                beatEvents.push_back(ev);
+            }
+        };
+
+        auto parseAudioArray = [&](const juce::Array<juce::var>* arr) {
+            if (!arr) return;
+            for (int i = 0; i < arr->size(); ++i) {
+                const juce::var& audioObj = arr->getReference(i);
+                if (!audioObj.isObject()) continue;
+                AudioClipRenderEvent ev;
+                ev.trackId = audioObj.getProperty("trackId", "").toString();
+                ev.file = juce::File(audioObj.getProperty("path", "").toString().unquoted());
+                ev.startTimeSeconds = audioObj.getProperty("startTime", 0.0);
+                ev.gainLinear = (float)audioObj.getProperty("gain", 1.0);
+                if (ev.file.getFullPathName().isNotEmpty()) {
+                    audioEvents.push_back(ev);
+                }
+            }
+        };
+
+        if (jsonData.isArray()) {
+            parseNotesArray(jsonData.getArray());
+        } else if (auto* obj = jsonData.getDynamicObject()) {
+            parseNotesArray(obj->getProperty("notes").getArray());
+            parseBeatsArray(obj->getProperty("beats").getArray());
+            parseAudioArray(obj->getProperty("audio").getArray());
+        } else {
+            emit("ERROR RENDER_WAV unexpected-payload-shape");
             return true;
         }
-        
+
+        if (notes.empty() && beatEvents.empty() && audioEvents.empty()) {
+            emit("ERROR RENDER_WAV empty-payload");
+            return true;
+        }
+
         juce::String err;
-        if (!ctx.host.renderToWav(notes, juce::File(outputPath), err, sampleRate, bitDepth)) {
+        if (!ctx.host.renderToWav(notes, juce::File(outputPath), err, sampleRate, bitDepth, beatEvents, audioEvents)) {
             emit("ERROR RENDER_WAV " + err);
         } else {
             emit("EVENT RENDER_COMPLETE " + outputPath);

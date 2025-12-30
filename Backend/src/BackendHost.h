@@ -40,6 +40,22 @@ struct BeatSample {
     double sampleRate = 44100.0;
 };
 
+// Offline render event for beat sampler rows
+struct BeatRenderEvent {
+    juce::String trackId;
+    juce::String rowId;
+    double startTimeSeconds = 0.0;
+    float gainLinear = 1.0f;
+};
+
+// Offline render event for audio clips placed on the timeline
+struct AudioClipRenderEvent {
+    juce::String trackId;
+    juce::File file;
+    double startTimeSeconds = 0.0;
+    float gainLinear = 1.0f;
+};
+
 // Multi-track JUCE host that manages multiple VST3 instances per track
 class BackendHost {
 public:
@@ -116,7 +132,9 @@ public:
                      const juce::File& outputPath,
                      juce::String& errorMessage,
                      double sampleRate = 44100.0,
-                     int bitDepth = 24);
+                     int bitDepth = 24,
+                     const std::vector<BeatRenderEvent>& beatEvents = {},
+                     const std::vector<AudioClipRenderEvent>& audioClips = {});
 
     double getSampleRate() const;
     int getBlockSize() const;

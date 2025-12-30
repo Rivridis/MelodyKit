@@ -50,10 +50,10 @@ api.backend = {
   closeEditor: (trackId) => ipcRenderer.invoke('backend:close-editor', trackId),
   // render current state for durationMs (legacy stub)
   render: (opts) => ipcRenderer.invoke('backend:render', opts),
-  // render MIDI notes to WAV using VST processing
-  renderWav: (notes, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav', { notes, sampleRate, bitDepth }),
-  // render MIDI notes to temporary WAV file (no dialog, for mixing)
-  renderWavTemp: (notes, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav-temp', { notes, sampleRate, bitDepth }),
+  // Render tracks to WAV using backend processing (structured payload)
+  renderWav: (payload, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav', { payload, sampleRate, bitDepth }),
+  // Render to temporary WAV file (no dialog, for internal mixing)
+  renderWavTemp: (payload, sampleRate, bitDepth) => ipcRenderer.invoke('backend:render-wav-temp', { payload, sampleRate, bitDepth }),
   // Get VST plugin preset state (base64-encoded binary data)
   getVSTState: (trackId) => ipcRenderer.invoke('backend:get-vst-state', trackId),
   // Set VST plugin preset state (from base64-encoded binary data)

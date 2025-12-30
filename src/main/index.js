@@ -447,10 +447,20 @@ app.whenReady().then(() => {
   })
 
   // Render MIDI notes to WAV using backend VST processing
-  ipcMain.handle('backend:render-wav', async (event, { notes, sampleRate = 44100, bitDepth = 24 }) => {
+  ipcMain.handle('backend:render-wav', async (event, { payload, notes, beats, audio, audioClips, sampleRate = 44100, bitDepth = 24 } = {}) => {
     try {
-      if (!notes || !Array.isArray(notes) || notes.length === 0) {
-        return { ok: false, error: 'No notes provided' }
+      const renderPayload = payload || {
+        notes: Array.isArray(notes) ? notes : [],
+        beats: Array.isArray(beats) ? beats : [],
+        audio: Array.isArray(audioClips) ? audioClips : Array.isArray(audio) ? audio : []
+      }
+
+      const hasNotes = Array.isArray(renderPayload.notes) && renderPayload.notes.length > 0
+      const hasBeats = Array.isArray(renderPayload.beats) && renderPayload.beats.length > 0
+      const hasAudio = Array.isArray(renderPayload.audio) && renderPayload.audio.length > 0
+
+      if (!hasNotes && !hasBeats && !hasAudio) {
+        return { ok: false, error: 'No render data provided' }
       }
 
       // Show save dialog first
@@ -460,7 +470,7 @@ app.whenReady().then(() => {
       const defaultName = `MelodyKit_${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.wav`
       
       const { canceled, filePath } = await dialog.showSaveDialog(win || undefined, {
-        title: 'Export VST Audio as WAV',
+        title: 'Export Audio as WAV',
         defaultPath: defaultName,
         filters: [{ name: 'WAV Audio', extensions: ['wav'] }]
       })
@@ -469,12 +479,10 @@ app.whenReady().then(() => {
         return { ok: false, canceled: true }
       }
 
-      // Encode notes as JSON and then base64 for safe single-line transmission
-      const jsonStr = JSON.stringify(notes)
-      const base64Data = Buffer.from(jsonStr, 'utf-8').toString('base64')
+      // Encode payload as JSON and then base64 for safe single-line transmission
+      const base64Data = Buffer.from(JSON.stringify(renderPayload), 'utf-8').toString('base64')
 
       // Send render command as single line
-      // Format: RENDER_WAV <outputPath> <sampleRate> <bitDepth> <base64EncodedNoteData>
       const command = `RENDER_WAV "${filePath}" ${sampleRate} ${bitDepth} ${base64Data}`
       
       const proc = spawnBackendIfAvailable()
@@ -524,19 +532,28 @@ app.whenReady().then(() => {
   })
 
   // Render MIDI notes to temporary WAV file (no dialog, for mixing)
-  ipcMain.handle('backend:render-wav-temp', async (event, { notes, sampleRate = 44100, bitDepth = 24 }) => {
+  ipcMain.handle('backend:render-wav-temp', async (event, { payload, notes, beats, audio, audioClips, sampleRate = 44100, bitDepth = 24 } = {}) => {
     try {
-      if (!notes || !Array.isArray(notes) || notes.length === 0) {
-        return { ok: false, error: 'No notes provided' }
+      const renderPayload = payload || {
+        notes: Array.isArray(notes) ? notes : [],
+        beats: Array.isArray(beats) ? beats : [],
+        audio: Array.isArray(audioClips) ? audioClips : Array.isArray(audio) ? audio : []
+      }
+
+      const hasNotes = Array.isArray(renderPayload.notes) && renderPayload.notes.length > 0
+      const hasBeats = Array.isArray(renderPayload.beats) && renderPayload.beats.length > 0
+      const hasAudio = Array.isArray(renderPayload.audio) && renderPayload.audio.length > 0
+
+      if (!hasNotes && !hasBeats && !hasAudio) {
+        return { ok: false, error: 'No render data provided' }
       }
 
       // Create temp file path
       const tempName = `melodykit_vst_${Date.now()}.wav`
       const filePath = path.join(app.getPath('temp'), tempName)
 
-      // Encode notes as JSON and then base64 for safe single-line transmission
-      const jsonStr = JSON.stringify(notes)
-      const base64Data = Buffer.from(jsonStr, 'utf-8').toString('base64')
+      // Encode payload as JSON and then base64 for safe single-line transmission
+      const base64Data = Buffer.from(JSON.stringify(renderPayload), 'utf-8').toString('base64')
 
       // Send render command as single line
       const command = `RENDER_WAV "${filePath}" ${sampleRate} ${bitDepth} ${base64Data}`

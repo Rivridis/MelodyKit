@@ -6,6 +6,7 @@
 #include <juce_core/juce_core.h>
 #include <algorithm>
 #include <iostream>
+#include <cmath>
 
 // SF2 audio callback for TinySoundFont rendering
 class SF2AudioCallback : public juce::AudioIODeviceCallback {
@@ -970,193 +971,387 @@ bool BackendHost::renderToWav(const std::vector<MidiNoteEvent>& notes,
                                const juce::File& outputPath,
                                juce::String& errorMessage,
                                double sampleRate,
-                               int bitDepth) {
-    if (notes.empty()) {
-        errorMessage = "No MIDI notes to render";
-        return false;
-    }
-    
+                               int bitDepth,
+                               const std::vector<BeatRenderEvent>& beatEvents,
+                               const std::vector<AudioClipRenderEvent>& audioClips) {
     // Validate bit depth
     if (bitDepth != 16 && bitDepth != 24 && bitDepth != 32) {
         errorMessage = "Invalid bit depth. Must be 16, 24, or 32";
         return false;
     }
-    
+
+    if (notes.empty() && beatEvents.empty() && audioClips.empty()) {
+        errorMessage = "Nothing to render";
+        return false;
+    }
+
     const juce::ScopedLock sl(tracksLock);
-    
-    // Find the total duration needed (last note end time)
+
+    // Determine total duration from notes first
     double totalDuration = 0.0;
     for (const auto& note : notes) {
-        double endTime = note.startTimeSeconds + note.durationSeconds;
-        if (endTime > totalDuration) {
-            totalDuration = endTime;
+        const double endTime = note.startTimeSeconds + note.durationSeconds;
+        if (endTime > totalDuration) totalDuration = endTime;
+    }
+
+    // Preload beat samples referenced by beatEvents and account for their duration
+    struct BeatJob {
+        std::shared_ptr<BeatSample> sample;
+        double startTimeSeconds = 0.0;
+        float gain = 1.0f;
+    };
+    std::vector<BeatJob> beatJobs;
+    {
+        const juce::ScopedLock bl(beatLock);
+        for (const auto& ev : beatEvents) {
+            auto trackIt = beatSamples.find(ev.trackId);
+            if (trackIt == beatSamples.end()) {
+                emit("WARNING: Beat track " + ev.trackId + " not loaded; skipping");
+                continue;
+            }
+            auto rowIt = trackIt->second.find(ev.rowId);
+            if (rowIt == trackIt->second.end() || !rowIt->second) {
+                emit("WARNING: Beat row " + ev.rowId + " missing for track " + ev.trackId);
+                continue;
+            }
+            auto samplePtr = rowIt->second;
+            if (!samplePtr || samplePtr->buffer.getNumSamples() == 0) continue;
+            const double sampleDuration = samplePtr->buffer.getNumSamples() / samplePtr->sampleRate;
+            const double endTime = ev.startTimeSeconds + sampleDuration;
+            if (endTime > totalDuration) totalDuration = endTime;
+            beatJobs.push_back({samplePtr, ev.startTimeSeconds, ev.gainLinear});
         }
     }
-    
+
+    // Preload audio clips referenced by export payload and compute duration
+    struct LoadedAudioClip {
+        AudioClipRenderEvent event;
+        juce::AudioBuffer<float> buffer;
+        double sourceRate = 44100.0;
+    };
+    std::vector<LoadedAudioClip> loadedClips;
+    for (const auto& clip : audioClips) {
+        if (!clip.file.existsAsFile()) {
+            emit("WARNING: Audio clip missing file " + clip.file.getFullPathName());
+            continue;
+        }
+
+        std::unique_ptr<juce::AudioFormatReader> reader(beatFormatManager.createReaderFor(clip.file));
+        if (!reader) {
+            emit("WARNING: Unsupported audio format for clip " + clip.file.getFullPathName());
+            continue;
+        }
+
+        const auto numSamples = reader->lengthInSamples;
+        if (numSamples <= 0) continue;
+
+        juce::AudioBuffer<float> buffer((int)reader->numChannels, (int)numSamples);
+        if (!reader->read(&buffer, 0, (int)numSamples, 0, true, true)) {
+            emit("WARNING: Failed to read audio clip " + clip.file.getFullPathName());
+            continue;
+        }
+
+        const double clipDuration = (double)numSamples / reader->sampleRate;
+        const double endTime = clip.startTimeSeconds + clipDuration;
+        if (endTime > totalDuration) totalDuration = endTime;
+
+        LoadedAudioClip loaded;
+        loaded.event = clip;
+        loaded.buffer = std::move(buffer);
+        loaded.sourceRate = reader->sampleRate;
+        loadedClips.push_back(std::move(loaded));
+    }
+
     // Add 2 seconds of tail for reverb/delay effects
     totalDuration += 2.0;
-    
+
     const int blockSize = 512;
-    const int totalSamples = static_cast<int>(totalDuration * sampleRate);
+    const int totalSamples = juce::jmax(1, static_cast<int>(totalDuration * sampleRate));
     const int numChannels = 2; // Stereo output
-    
+
     // Create output buffer
     juce::AudioBuffer<float> renderBuffer(numChannels, totalSamples);
     renderBuffer.clear();
-    
-    // Group notes by track ID
+
+    // Group MIDI notes by track ID
     std::map<juce::String, std::vector<const MidiNoteEvent*>> notesByTrack;
     for (const auto& note : notes) {
         notesByTrack[note.trackId].push_back(&note);
     }
-    
+
     // Process each track separately, then mix
     for (const auto& [trackId, trackNotes] : notesByTrack) {
         auto trackIt = tracks.find(trackId);
-        if (trackIt == tracks.end() || !trackIt->second.plugin) {
-            emit("WARNING: Track " + trackId + " not found or has no plugin loaded, skipping");
+        if (trackIt == tracks.end()) {
+            emit("WARNING: Track " + trackId + " not found, skipping");
             continue;
         }
-        
-        auto* plugin = trackIt->second.plugin.get();
-        
-        // Prepare plugin for rendering
-        plugin->prepareToPlay(sampleRate, blockSize);
-        plugin->setNonRealtime(true); // Enable offline rendering mode
-        
-        // Create temporary buffer for this track
-        juce::AudioBuffer<float> trackBuffer(numChannels, totalSamples);
-        trackBuffer.clear();
-        
-        juce::MidiBuffer midiBuffer;
-        
+
+        TrackState& track = trackIt->second;
+
         // Sort notes by start time for this track
         std::vector<const MidiNoteEvent*> sortedNotes = trackNotes;
         std::sort(sortedNotes.begin(), sortedNotes.end(),
                   [](const MidiNoteEvent* a, const MidiNoteEvent* b) {
                       return a->startTimeSeconds < b->startTimeSeconds;
                   });
-        
-        // Build MIDI message timeline
-        std::vector<std::pair<int, juce::MidiMessage>> midiTimeline;
-        for (const auto* note : sortedNotes) {
-            int samplePos = static_cast<int>(note->startTimeSeconds * sampleRate);
-            int noteOffPos = static_cast<int>((note->startTimeSeconds + note->durationSeconds) * sampleRate);
-            
-            // Clamp to valid range
-            samplePos = juce::jlimit(0, totalSamples - 1, samplePos);
-            noteOffPos = juce::jlimit(0, totalSamples - 1, noteOffPos);
-            
-            float velocity = juce::jlimit(0.0f, 1.0f, note->velocity01);
-            
-            midiTimeline.push_back({samplePos, juce::MidiMessage::noteOn(note->channel, note->midiNote, velocity)});
-            midiTimeline.push_back({noteOffPos, juce::MidiMessage::noteOff(note->channel, note->midiNote)});
-        }
-        
-        // Sort MIDI timeline by sample position
-        std::sort(midiTimeline.begin(), midiTimeline.end(),
-                  [](const auto& a, const auto& b) { return a.first < b.first; });
-        
-        // Process audio in blocks
-        int currentSample = 0;
-        size_t midiIndex = 0;
-        
-        while (currentSample < totalSamples) {
-            const int samplesThisBlock = juce::jmin(blockSize, totalSamples - currentSample);
-            
-            // Clear MIDI buffer for this block
-            midiBuffer.clear();
-            
-            // Add MIDI messages that occur in this block
-            while (midiIndex < midiTimeline.size()) {
-                const auto& [samplePos, msg] = midiTimeline[midiIndex];
-                
-                if (samplePos < currentSample) {
-                    // Skip past messages (shouldn't happen with sorted timeline)
-                    ++midiIndex;
-                    continue;
-                }
-                
-                if (samplePos >= currentSample + samplesThisBlock) {
-                    // Future message, process in next block
-                    break;
-                }
-                
-                // Add message at relative position within block
-                int relativePos = samplePos - currentSample;
-                midiBuffer.addEvent(msg, relativePos);
-                ++midiIndex;
+
+        // Common buffer for this track
+        juce::AudioBuffer<float> trackBuffer(numChannels, totalSamples);
+        trackBuffer.clear();
+
+        if (track.plugin) {
+            auto* plugin = track.plugin.get();
+
+            // Prepare plugin for rendering
+            plugin->prepareToPlay(sampleRate, blockSize);
+            plugin->setNonRealtime(true); // Enable offline rendering mode
+
+            juce::MidiBuffer midiBuffer;
+
+            // Build MIDI message timeline
+            std::vector<std::pair<int, juce::MidiMessage>> midiTimeline;
+            for (const auto* note : sortedNotes) {
+                int samplePos = static_cast<int>(note->startTimeSeconds * sampleRate);
+                int noteOffPos = static_cast<int>((note->startTimeSeconds + note->durationSeconds) * sampleRate);
+
+                // Clamp to valid range
+                samplePos = juce::jlimit(0, totalSamples - 1, samplePos);
+                noteOffPos = juce::jlimit(0, totalSamples - 1, noteOffPos);
+
+                float velocity = juce::jlimit(0.0f, 1.0f, note->velocity01);
+
+                midiTimeline.push_back({samplePos, juce::MidiMessage::noteOn(note->channel, note->midiNote, velocity)});
+                midiTimeline.push_back({noteOffPos, juce::MidiMessage::noteOff(note->channel, note->midiNote)});
             }
-            
-            // Create a slice of the track buffer for this block
-            juce::AudioBuffer<float> blockBuffer(
-                trackBuffer.getArrayOfWritePointers(),
-                numChannels,
-                currentSample,
-                samplesThisBlock
-            );
-            
-            // Process the block
-            plugin->processBlock(blockBuffer, midiBuffer);
-            
-            currentSample += samplesThisBlock;
+
+            // Sort MIDI timeline by sample position
+            std::sort(midiTimeline.begin(), midiTimeline.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
+
+            // Process audio in blocks
+            int currentSample = 0;
+            size_t midiIndex = 0;
+
+            while (currentSample < totalSamples) {
+                const int samplesThisBlock = juce::jmin(blockSize, totalSamples - currentSample);
+
+                // Clear MIDI buffer for this block
+                midiBuffer.clear();
+
+                // Add MIDI messages that occur in this block
+                while (midiIndex < midiTimeline.size()) {
+                    const auto& [samplePos, msg] = midiTimeline[midiIndex];
+
+                    if (samplePos < currentSample) {
+                        ++midiIndex;
+                        continue;
+                    }
+
+                    if (samplePos >= currentSample + samplesThisBlock) {
+                        break;
+                    }
+
+                    // Add message at relative position within block
+                    const int relativePos = samplePos - currentSample;
+                    midiBuffer.addEvent(msg, relativePos);
+                    ++midiIndex;
+                }
+
+                // Create a slice of the track buffer for this block
+                juce::AudioBuffer<float> blockBuffer(
+                    trackBuffer.getArrayOfWritePointers(),
+                    numChannels,
+                    currentSample,
+                    samplesThisBlock
+                );
+
+                // Process the block
+                plugin->processBlock(blockBuffer, midiBuffer);
+
+                currentSample += samplesThisBlock;
+            }
+
+            // Reset plugin state
+            plugin->setNonRealtime(false);
+            plugin->releaseResources();
+            plugin->prepareToPlay(getSampleRate(), getBlockSize());
+        } else if (track.soundFont) {
+            // Offline render for SF2 tracks using TinySoundFont
+            tsf* sf = track.soundFont;
+            tsf_set_output(sf, TSF_STEREO_INTERLEAVED, (int)sampleRate, 0.0f);
+
+            struct SF2Event { int samplePos; bool noteOn; int midiNote; float velocity; int channel; };
+            std::vector<SF2Event> timeline;
+            for (const auto* note : sortedNotes) {
+                int samplePos = static_cast<int>(note->startTimeSeconds * sampleRate);
+                int noteOffPos = static_cast<int>((note->startTimeSeconds + note->durationSeconds) * sampleRate);
+                samplePos = juce::jlimit(0, totalSamples - 1, samplePos);
+                noteOffPos = juce::jlimit(0, totalSamples - 1, noteOffPos);
+
+                float velocity = juce::jlimit(0.0f, 1.0f, note->velocity01);
+                timeline.push_back({samplePos, true, note->midiNote, velocity, note->channel});
+                timeline.push_back({noteOffPos, false, note->midiNote, velocity, note->channel});
+            }
+
+            std::sort(timeline.begin(), timeline.end(), [](const SF2Event& a, const SF2Event& b) {
+                return a.samplePos < b.samplePos;
+            });
+
+            std::vector<float> tempInterleaved;
+            tempInterleaved.resize((size_t)blockSize * (size_t)numChannels);
+
+            int currentSample = 0;
+            size_t eventIndex = 0;
+
+            auto dispatchEventsUpTo = [&](int samplePos) {
+                while (eventIndex < timeline.size() && timeline[eventIndex].samplePos <= samplePos) {
+                    const auto& ev = timeline[eventIndex];
+                    const int tsfChannel = juce::jlimit(0, 15, ev.channel - 1);
+                    if (ev.noteOn) {
+                        tsf_channel_note_on(sf, tsfChannel, ev.midiNote, ev.velocity);
+                    } else {
+                        tsf_channel_note_off(sf, tsfChannel, ev.midiNote);
+                    }
+                    ++eventIndex;
+                }
+            };
+
+            // Fire any events at time 0
+            dispatchEventsUpTo(0);
+
+            while (currentSample < totalSamples) {
+                const int nextEventSample = (eventIndex < timeline.size()) ? timeline[eventIndex].samplePos : totalSamples;
+                const int remaining = totalSamples - currentSample;
+                const int untilNext = juce::jmax(1, nextEventSample - currentSample);
+                const int samplesThisBlock = juce::jmin(blockSize, juce::jmin(remaining, untilNext));
+
+                // Render block
+                tempInterleaved.resize((size_t)samplesThisBlock * (size_t)numChannels);
+                tsf_render_float(sf, tempInterleaved.data(), samplesThisBlock, 0);
+
+                // Deinterleave and copy
+                for (int i = 0; i < samplesThisBlock; ++i) {
+                    const float l = tempInterleaved[(size_t)i * 2];
+                    const float r = tempInterleaved[(size_t)i * 2 + 1];
+                    trackBuffer.setSample(0, currentSample + i, l);
+                    trackBuffer.setSample(1, currentSample + i, r);
+                }
+
+                currentSample += samplesThisBlock;
+
+                // Dispatch any events scheduled at or before the new time
+                dispatchEventsUpTo(currentSample);
+            }
+        } else {
+            emit("WARNING: Track " + trackId + " has no plugin or SF2 loaded; skipping");
+            continue;
         }
-        
-        // Reset plugin state
-        plugin->setNonRealtime(false);
-        plugin->releaseResources();
-        plugin->prepareToPlay(getSampleRate(), getBlockSize());
-        
+
         // Apply track gain to the rendered audio
-        const float trackGain = trackIt->second.gainLinear;
+        const float trackGain = track.gainLinear;
         if (trackGain != 1.0f) {
             trackBuffer.applyGain(trackGain);
         }
-        
+
         // Mix track buffer into main render buffer
         for (int ch = 0; ch < numChannels; ++ch) {
             renderBuffer.addFrom(ch, 0, trackBuffer, ch, 0, totalSamples);
         }
     }
-    
+
+    // Mix beat events (already prepared as beatJobs)
+    for (const auto& job : beatJobs) {
+        auto samplePtr = job.sample;
+        if (!samplePtr) continue;
+
+        const int srcChannels = samplePtr->buffer.getNumChannels();
+        const int srcSamples = samplePtr->buffer.getNumSamples();
+        if (srcSamples == 0) continue;
+
+        const double ratio = samplePtr->sampleRate / sampleRate;
+        const int startSample = juce::jlimit(0, totalSamples - 1, (int)std::floor(job.startTimeSeconds * sampleRate));
+
+        for (int dest = startSample; dest < totalSamples; ++dest) {
+            const double srcPos = (dest - startSample) * ratio;
+            const int idx = (int)srcPos;
+            if (idx >= srcSamples) break;
+            const double frac = srcPos - (double)idx;
+
+            for (int ch = 0; ch < numChannels; ++ch) {
+                const int srcCh = (srcChannels == 1) ? 0 : juce::jmin(ch, srcChannels - 1);
+                const float s0 = samplePtr->buffer.getSample(srcCh, idx);
+                const float s1 = (idx + 1 < srcSamples) ? samplePtr->buffer.getSample(srcCh, idx + 1) : 0.0f;
+                const float blended = (float)((1.0 - frac) * s0 + frac * s1);
+                renderBuffer.addSample(ch, dest, blended * job.gain);
+            }
+        }
+    }
+
+    // Mix audio clips
+    for (const auto& clip : loadedClips) {
+        const int srcChannels = clip.buffer.getNumChannels();
+        const int srcSamples = clip.buffer.getNumSamples();
+        if (srcSamples == 0) continue;
+
+        const double ratio = clip.sourceRate / sampleRate;
+        const int startSample = juce::jlimit(0, totalSamples - 1, (int)std::floor(clip.event.startTimeSeconds * sampleRate));
+        const float gain = clip.event.gainLinear;
+
+        for (int dest = startSample; dest < totalSamples; ++dest) {
+            const double srcPos = (dest - startSample) * ratio;
+            const int idx = (int)srcPos;
+            if (idx >= srcSamples) break;
+            const double frac = srcPos - (double)idx;
+
+            for (int ch = 0; ch < numChannels; ++ch) {
+                const int srcCh = (srcChannels == 1) ? 0 : juce::jmin(ch, srcChannels - 1);
+                const float s0 = clip.buffer.getSample(srcCh, idx);
+                const float s1 = (idx + 1 < srcSamples) ? clip.buffer.getSample(srcCh, idx + 1) : 0.0f;
+                const float blended = (float)((1.0 - frac) * s0 + frac * s1);
+                renderBuffer.addSample(ch, dest, blended * gain);
+            }
+        }
+    }
+
     // Normalize the output to prevent clipping
     float maxLevel = renderBuffer.getMagnitude(0, totalSamples);
     if (maxLevel > 0.99f) {
         float gain = 0.99f / maxLevel;
         renderBuffer.applyGain(gain);
     }
-    
+
     // Write to WAV file
     outputPath.deleteFile(); // Remove if exists
-    
+
     std::unique_ptr<juce::FileOutputStream> outStream(outputPath.createOutputStream());
     if (!outStream) {
         errorMessage = "Failed to create output file: " + outputPath.getFullPathName();
         return false;
     }
-    
+
     juce::WavAudioFormat wavFormat;
-    int bitsPerSample = bitDepth;
-    
+    const int bitsPerSample = bitDepth;
+
     std::unique_ptr<juce::AudioFormatWriter> writer(
         wavFormat.createWriterFor(outStream.get(), sampleRate, numChannels,
                                   bitsPerSample, {}, 0)
     );
-    
+
     if (!writer) {
         errorMessage = "Failed to create WAV writer";
         return false;
     }
-    
+
     outStream.release(); // Writer now owns the stream
-    
+
     if (!writer->writeFromAudioSampleBuffer(renderBuffer, 0, totalSamples)) {
         errorMessage = "Failed to write audio data to file";
         return false;
     }
-    
+
     writer.reset(); // Flush and close
-    
+
     emit("EVENT RENDERED " + outputPath.getFullPathName());
     return true;
 }
