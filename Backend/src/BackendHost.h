@@ -6,6 +6,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <atomic>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@ typedef struct tsf tsf;
 class PluginEditorWindow;
 class GainAudioCallback;
 class SF2AudioCallback;
+class BeatAudioCallback;
 
 // MIDI note event for rendering
 struct MidiNoteEvent {
@@ -30,6 +32,12 @@ struct MidiNoteEvent {
                   int note, float vel, int ch = 1)
         : trackId(tid), startTimeSeconds(start), durationSeconds(duration),
           midiNote(note), velocity01(vel), channel(ch) {}
+};
+
+// Simple PCM buffer for beat samples
+struct BeatSample {
+    juce::AudioBuffer<float> buffer;
+    double sampleRate = 44100.0;
 };
 
 // Multi-track JUCE host that manages multiple VST3 instances per track
@@ -80,6 +88,24 @@ public:
     // Returns true on success, false if no plugin loaded or data invalid
     bool setPluginState(const juce::String& trackId, const juce::String& base64State);
 
+    // Beat sampler controls
+    bool loadBeatSample(const juce::String& trackId,
+                        const juce::String& rowId,
+                        const juce::File& file,
+                        juce::String& errorMessage);
+    void triggerBeat(const juce::String& trackId,
+                     const juce::String& rowId,
+                     float gainLinear = 1.0f);
+    void clearBeatTrack(const juce::String& trackId);
+    void clearBeatRow(const juce::String& trackId, const juce::String& rowId);
+
+    // Beat voice used by the shared mixer callback
+    struct BeatVoice {
+        std::shared_ptr<BeatSample> sample;
+        double position = 0.0; // position in source samples
+        float gain = 1.0f;
+    };
+
     // Render MIDI notes to WAV file using realtime processing
     // notes: array of MIDI events sorted by startTimeSeconds
     // outputPath: output WAV file path
@@ -102,6 +128,7 @@ private:
 
     juce::AudioDeviceManager deviceManager;
     juce::AudioPluginFormatManager formatManager;
+    juce::AudioFormatManager beatFormatManager;
     
     // Per-track plugin state
     struct TrackState {
@@ -127,4 +154,9 @@ private:
     
     std::map<juce::String, TrackState> tracks;
     mutable juce::CriticalSection tracksLock;
+
+    std::map<juce::String, std::map<juce::String, std::shared_ptr<BeatSample>>> beatSamples; // trackId -> rowId -> sample
+    std::map<juce::String, std::vector<BeatVoice>> beatVoices; // trackId -> active voices
+    mutable juce::CriticalSection beatLock;
+    std::unique_ptr<BeatAudioCallback> beatCallback;
 };

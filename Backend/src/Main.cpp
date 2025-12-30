@@ -97,6 +97,66 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         return true;
     }
 
+    if (command == "LOAD_BEAT_SAMPLE") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.size() < 3) {
+            emit("ERROR LOAD_BEAT_SAMPLE missing-args (trackId rowId path)");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        const juce::String rowId = tokens[1];
+        const juce::String path = tokens[2];
+        juce::String err;
+        if (!ctx.host.loadBeatSample(trackId, rowId, juce::File(path.unquoted()), err)) {
+            emit("ERROR LOAD_BEAT_SAMPLE " + trackId + " " + rowId + " " + err);
+        } else {
+            emit("EVENT BEAT_READY " + trackId + " " + rowId);
+        }
+        return true;
+    }
+
+    if (command == "TRIGGER_BEAT") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.size() < 2) {
+            emit("ERROR TRIGGER_BEAT missing-args (trackId rowId [gain])");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        const juce::String rowId = tokens[1];
+        const float gain = tokens.size() > 2 ? tokens[2].getFloatValue() : 1.0f;
+        ctx.host.triggerBeat(trackId, rowId, gain);
+        return true;
+    }
+
+    if (command == "CLEAR_BEAT") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.isEmpty()) {
+            emit("ERROR CLEAR_BEAT missing-track-id");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        if (tokens.size() >= 2) {
+            const juce::String rowId = tokens[1];
+            ctx.host.clearBeatRow(trackId, rowId);
+        } else {
+            ctx.host.clearBeatTrack(trackId);
+        }
+        emit("EVENT BEAT_CLEARED " + trackId);
+        return true;
+    }
+
     if (command == "NOTE" || command == "NOTE_ON") {
         juce::StringArray tokens;
         tokens.addTokens(args, " ", "\"'");

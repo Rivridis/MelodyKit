@@ -250,6 +250,39 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('backend:load-beat-sample', async (event, { trackId, rowId, path: samplePath }) => {
+    try {
+      if (!trackId || !rowId || !samplePath) {
+        return { ok: false, error: 'missing-track-row-or-path' }
+      }
+      const normalized = path.isAbsolute(samplePath) ? samplePath : path.join(process.cwd(), samplePath)
+      if (!fs.existsSync(normalized)) return { ok: false, error: 'file-not-found', path: normalized }
+      return sendToBackend(`LOAD_BEAT_SAMPLE ${trackId} ${rowId} "${normalized}"`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:trigger-beat', async (event, { trackId, rowId, gain = 1.0 }) => {
+    try {
+      if (!trackId || !rowId) return { ok: false, error: 'missing-track-or-row' }
+      const g = Math.max(0, Math.min(4, Number(gain) || 1))
+      return sendToBackend(`TRIGGER_BEAT ${trackId} ${rowId} ${g}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:clear-beat', async (event, { trackId, rowId }) => {
+    try {
+      if (!trackId) return { ok: false, error: 'missing-track-id' }
+      if (rowId) return sendToBackend(`CLEAR_BEAT ${trackId} ${rowId}`)
+      return sendToBackend(`CLEAR_BEAT ${trackId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('backend:panic', async (event, trackId = '') => {
     try {
       return sendToBackend(`PANIC ${trackId}`)

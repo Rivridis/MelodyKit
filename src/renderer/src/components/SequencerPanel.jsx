@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { getSharedAudioContext } from '@renderer/utils/audioContext'
 
 // Simple drum sequencer panel for editing a beat track
 // Props:
@@ -11,22 +10,53 @@ import { getSharedAudioContext } from '@renderer/utils/audioContext'
 export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm }) {
   const [available, setAvailable] = useState([])
   const [local, setLocal] = useState(() => normalizePattern(pattern))
-  const audioContextRef = useState(() => getSharedAudioContext())[0]
-  const loadedBuffersRef = React.useRef({}) // { rowId: AudioBuffer }
   const isPlayingRef = React.useRef(false)
   const timerRef = React.useRef(null)
   const lastSubdivisionRef = React.useRef(-1)
+  const loadedPathsRef = React.useRef({}) // { rowId: filePath }
+  const syncingFromPropRef = React.useRef(false)
+  const onChangeRef = React.useRef(onChange)
   // Keep a live ref of the current pattern so the preview loop always sees updates
   const currentPatternRef = React.useRef(local)
 
   useEffect(() => {
+    onChangeRef.current = onChange
+  }, [onChange])
+
+  useEffect(() => {
+    syncingFromPropRef.current = true
     setLocal(normalizePattern(pattern))
   }, [pattern])
 
   // Keep the live pattern ref in sync so the scheduler reads fresh data
   useEffect(() => {
     currentPatternRef.current = local
+
+    // Propagate changes to parent after render to avoid setState during render warnings
+    if (syncingFromPropRef.current) {
+      syncingFromPropRef.current = false
+      return
+    }
+    onChangeRef.current?.(local)
   }, [local])
+
+  const loadSamplesForPattern = React.useCallback(async (p) => {
+    if (!trackId || !p || !Array.isArray(p.rows)) return
+    for (const row of p.rows) {
+      if (!row?.id || !row?.filePath) continue
+      if (loadedPathsRef.current[row.id] === row.filePath) continue
+      try {
+        await window.api?.backend?.loadBeatSample?.(String(trackId), String(row.id), row.filePath)
+        loadedPathsRef.current[row.id] = row.filePath
+      } catch (e) {
+        console.error('Failed to load beat sample into backend', row.filePath, e)
+      }
+    }
+  }, [trackId])
+
+  useEffect(() => {
+    loadSamplesForPattern(local)
+  }, [local, loadSamplesForPattern])
 
   // Persistence is driven by App state + project autosave; no localStorage here
 
@@ -62,9 +92,7 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
         next.steps[idx] = !next.steps[idx]
         return next
       })
-      const next = { ...prev, rows }
-      onChange?.(next)
-      return next
+      return { ...prev, rows }
     })
   }
 
@@ -73,15 +101,8 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
     if (!sound) return
     setLocal((prev) => {
       const rows = prev.rows.map((r) => r.id === rowId ? { ...r, name: sound.name, filePath: sound.filePath, fileUrl: sound.fileUrl } : r)
-      const next = { ...prev, rows }
-      onChange?.(next)
-      // Invalidate cached buffer for this row so new sample is used
-      try { delete loadedBuffersRef.current[rowId] } catch {}
-      // If currently playing, eagerly (re)load the new buffer so switches take effect immediately
-      if (isPlayingRef.current && audioContextRef) {
-        ensureBuffersLoaded(next, loadedBuffersRef, audioContextRef).catch((e) => console.error('reload buffer after switch failed', e))
-      }
-      return next
+      try { delete loadedPathsRef.current[rowId] } catch {}
+      return { ...prev, rows }
     })
   }
 
@@ -97,17 +118,13 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
     }
     const next = { ...local, rows: [...local.rows, newRow] }
     setLocal(next)
-    onChange?.(next)
-    // If playing, ensure any new row buffer is preloaded so it can sound immediately
-    if (isPlayingRef.current && audioContextRef) {
-      ensureBuffersLoaded(next, loadedBuffersRef, audioContextRef).catch((e) => console.error('preload after add row failed', e))
-    }
   }
 
   const removeRow = (rowId) => {
     const next = { ...local, rows: local.rows.filter((r) => r.id !== rowId) }
     setLocal(next)
-    onChange?.(next)
+    try { delete loadedPathsRef.current[rowId] } catch {}
+    window.api?.backend?.clearBeat?.(String(trackId), String(rowId)).catch(() => {})
   }
 
   const setSteps = (n) => {
@@ -119,7 +136,6 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
     }))
     const next = { steps: count, rows, lengthBeats: local.lengthBeats }
     setLocal(next)
-    onChange?.(next)
   }
 
   return (
@@ -138,18 +154,14 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
           <SequencerPlayButton
             getIsPlaying={() => !!isPlayingRef.current}
             onToggle={async () => {
-              if (!audioContextRef) return
               if (isPlayingRef.current) {
                 stopPreview(timerRef, isPlayingRef)
               } else {
-                try { if (audioContextRef.state === 'suspended') await audioContextRef.resume() } catch {}
-                await ensureBuffersLoaded(local, loadedBuffersRef, audioContextRef)
+                await loadSamplesForPattern(currentPatternRef.current)
                 startPreview({
                   bpm,
-                  // Use a function to fetch the freshest pattern inside the loop
                   getCurrentPattern: () => currentPatternRef.current,
-                  audioContext: audioContextRef,
-                  loaded: loadedBuffersRef,
+                  trackId,
                   timerRef,
                   lastSubdivisionRef,
                   isPlayingRef
@@ -260,71 +272,30 @@ function SequencerPlayButton({ getIsPlaying, onToggle }) {
   )
 }
 
-async function ensureBuffersLoaded(local, loadedBuffersRef, audioContext) {
-  const rows = local?.rows || []
-  for (const row of rows) {
-    if (!row?.id || !row?.filePath) continue
-    if (loadedBuffersRef.current[row.id]) continue
-    try {
-      const res = await window.api?.readAudioFile?.(row.filePath)
-      if (res && res.ok && Array.isArray(res.bytes)) {
-        const uint8 = Uint8Array.from(res.bytes)
-        const ab = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength)
-        const buffer = await audioContext.decodeAudioData(ab)
-        loadedBuffersRef.current[row.id] = buffer
-      }
-    } catch (e) {
-      console.error('Sequencer decode error', row.filePath, e)
-    }
-  }
-}
-
-function startPreview({ bpm, getCurrentPattern, audioContext, loaded, timerRef, lastSubdivisionRef, isPlayingRef }) {
-  // Phase-based scheduler: evenly distribute all steps across the region length (1 bar by default)
+function startPreview({ bpm, getCurrentPattern, trackId, timerRef, lastSubdivisionRef, isPlayingRef }) {
   const beatDurationMs = 60000 / bpm
-  // Always map steps across a single bar (4 beats) for preview; if the region is expanded in track view,
-  // the pattern should loop per bar rather than stretch.
   const regionBeats = 4
 
   isPlayingRef.current = true
-  // Reuse this ref to store lastStepIndex to avoid duplicate triggers in tight intervals
   lastSubdivisionRef.current = -1
   const startTime = Date.now()
 
   timerRef.current = setInterval(() => {
     if (!isPlayingRef.current) return
-    // Always read the latest pattern so edits apply immediately
     const pattern = getCurrentPattern?.() || {}
     const steps = Math.max(1, Number(pattern.steps) || 16)
     const rows = pattern.rows || []
     const elapsed = Date.now() - startTime
     const beat = elapsed / beatDurationMs
-    // Normalize to [0, regionBeats)
-  const beatInRegion = beat % regionBeats
-  const phase = beatInRegion / regionBeats // 0..1 within the bar
-    const stepIndex = Math.floor(phase * steps) // 0..steps-1
+    const beatInRegion = beat % regionBeats
+    const phase = beatInRegion / regionBeats
+    const stepIndex = Math.floor(phase * steps)
     if (stepIndex === lastSubdivisionRef.current) return
     lastSubdivisionRef.current = stepIndex
 
-    // trigger rows
     rows.forEach((row) => {
-      if (!row?.steps?.[stepIndex]) return
-      const buf = loaded.current[row.id]
-      if (!buf) return
-      try {
-        const src = audioContext.createBufferSource()
-        src.buffer = buf
-  // Gentle fixed preview volume (independent of track slider)
-  const g = audioContext.createGain()
-  g.gain.value = 0.8
-        src.connect(g)
-        g.connect(audioContext.destination)
-        src.start()
-        src.onended = () => {
-          try { src.disconnect(); g.disconnect() } catch {}
-        }
-      } catch (e) {
-        console.error('sequencer preview play error', e)
+      if (row?.steps?.[stepIndex]) {
+        window.api?.backend?.triggerBeat?.(String(trackId), String(row.id), 0.8)
       }
     })
   }, 20)

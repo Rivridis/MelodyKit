@@ -39,6 +39,10 @@ api.backend = {
   noteOn: (opts) => ipcRenderer.invoke('backend:note-on', opts),
   // set track volume via MIDI CC (0-127, where 100 is default)
   setVolume: (trackId, volume, channel) => ipcRenderer.invoke('backend:set-volume', { trackId, volume, channel }),
+  // beat sampler controls
+  loadBeatSample: (trackId, rowId, path) => ipcRenderer.invoke('backend:load-beat-sample', { trackId, rowId, path }),
+  triggerBeat: (trackId, rowId, gain) => ipcRenderer.invoke('backend:trigger-beat', { trackId, rowId, gain }),
+  clearBeat: (trackId, rowId) => ipcRenderer.invoke('backend:clear-beat', { trackId, rowId }),
   // optional helpers
   panic: (trackId) => ipcRenderer.invoke('backend:panic', trackId),
   status: () => ipcRenderer.invoke('backend:status'),

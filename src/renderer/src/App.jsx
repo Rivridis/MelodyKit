@@ -177,6 +177,8 @@ function App() {
   const newTrackOffsets = { ...trackOffsets }
   delete newTrackOffsets[trackId]
   setTrackOffsets(newTrackOffsets)
+    // Clear backend beat resources if this was a beat track
+    window.api?.backend?.clearBeat?.(String(trackId)).catch(() => {})
     
     // Select another track if we deleted the selected one
     if (selectedTrackId === trackId) {

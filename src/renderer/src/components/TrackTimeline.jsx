@@ -83,7 +83,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const trackInstrumentsRef = useRef(trackInstruments)
   const loadedInstrumentsRef = useRef({}) // Store loaded instruments by track ID
   const loadedAudioClipsRef = useRef({}) // Store decoded AudioBuffer by track ID for audio tracks
-  const loadedBeatSamplesRef = useRef({}) // { [trackId]: { [rowId]: AudioBuffer } }
+  const beatSamplePathsRef = useRef({}) // { [trackId]: { [rowId]: filePath } }
   const audioSourcesRef = useRef({}) // Active AudioBufferSourceNodes per audio track
   const activeSourcesRef = useRef([]) // Track active audio sources
   const beatLastStepRef = useRef({}) // Track last step index per beat track for scheduling
@@ -371,48 +371,40 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     load()
   }, [tracks])
 
-  // Load drum samples for beat tracks
+  // Load drum samples for beat tracks into the backend (JUCE)
   useEffect(() => {
-    const ctx = audioContextRef.current
-    if (!ctx || !trackBeats) return
     const load = async () => {
+      if (!trackBeats) return
       for (const t of tracks) {
         if (t.type !== 'beat') continue
         const pattern = trackBeats[t.id]
         if (!pattern || !Array.isArray(pattern.rows)) continue
-        if (!loadedBeatSamplesRef.current[t.id]) loadedBeatSamplesRef.current[t.id] = {}
+        if (!beatSamplePathsRef.current[t.id]) beatSamplePathsRef.current[t.id] = {}
         for (const row of pattern.rows) {
-          const key = row.id
-          if (!key) continue
-          const hasBuf = loadedBeatSamplesRef.current[t.id][key]
-          const filePath = row.filePath
-          if (!hasBuf && filePath && window.api?.readAudioFile) {
-            try {
-              const res = await window.api.readAudioFile(filePath)
-              if (res && res.ok && Array.isArray(res.bytes)) {
-                const uint8 = Uint8Array.from(res.bytes)
-                const ab = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength)
-                const buffer = await ctx.decodeAudioData(ab)
-                loadedBeatSamplesRef.current[t.id][key] = buffer
-              }
-            } catch (e) {
-              console.error('Failed to load beat sample', filePath, e)
-            }
+          if (!row?.id || !row?.filePath) continue
+          if (beatSamplePathsRef.current[t.id][row.id] === row.filePath) continue
+          try {
+            await window.api?.backend?.loadBeatSample?.(String(t.id), String(row.id), row.filePath)
+            beatSamplePathsRef.current[t.id][row.id] = row.filePath
+          } catch (e) {
+            console.error('Failed to send beat sample to backend', row.filePath, e)
           }
         }
-      }
-      // Cleanup missing tracks/rows
-      Object.keys(loadedBeatSamplesRef.current).forEach((trackId) => {
-        if (!tracks.find(tr => String(tr.id) === String(trackId))) {
-          delete loadedBeatSamplesRef.current[trackId]
-        }
-      })
-      Object.entries(loadedBeatSamplesRef.current).forEach(([trackId, map]) => {
-        const p = trackBeats[trackId]
-        const validRowIds = new Set((p?.rows || []).map(r => r.id))
-        Object.keys(map).forEach((rid) => {
-          if (!validRowIds.has(rid)) delete map[rid]
+        // Cleanup missing rows for this track
+        const valid = new Set((pattern.rows || []).map((r) => String(r.id)))
+        Object.keys(beatSamplePathsRef.current[t.id]).forEach((rid) => {
+          if (!valid.has(rid)) {
+            delete beatSamplePathsRef.current[t.id][rid]
+            window.api?.backend?.clearBeat?.(String(t.id), String(rid)).catch(() => {})
+          }
         })
+      }
+      // Cleanup removed beat tracks
+      Object.keys(beatSamplePathsRef.current).forEach((trackId) => {
+        if (!tracks.find((tr) => String(tr.id) === String(trackId) && tr.type === 'beat')) {
+          delete beatSamplePathsRef.current[trackId]
+          window.api?.backend?.clearBeat?.(trackId).catch(() => {})
+        }
       })
     }
     load()
@@ -1061,30 +1053,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             const last = beatLastStepRef.current[t.id]
             if (last === stepIndex) return
             beatLastStepRef.current[t.id] = stepIndex
-            const rowBuffers = loadedBeatSamplesRef.current?.[t.id] || {}
-            const ctx = audioContextRef.current
-            const { pre, g } = ensureTrackChain(t.id)
             p.rows.forEach((row) => {
               if (row.steps?.[stepIndex]) {
-                const buf = rowBuffers[row.id]
-                if (buf && ctx) {
-                  try {
-                    const src = ctx.createBufferSource()
-                    src.buffer = buf
-                    if (pre) src.connect(pre)
-                    else if (g) src.connect(g)
-                    else if (masterGainRef.current) src.connect(masterGainRef.current)
-                    else src.connect(ctx.destination)
-                    src.start()
-                    activeSourcesRef.current.push(src)
-                    src.onended = () => {
-                      try { src.disconnect() } catch {}
-                      const arr = activeSourcesRef.current
-                      const idx = arr.indexOf(src)
-                      if (idx >= 0) arr.splice(idx, 1)
-                    }
-                  } catch (e) { console.error('beat playback error', e) }
-                }
+                const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
+                const gainLinear = vol / 100
+                window.api?.backend?.triggerBeat?.(String(t.id), String(row.id), gainLinear)
               }
             })
           })
@@ -1540,30 +1513,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const last = beatLastStepRef.current[t.id]
               if (last === stepIndex) return
               beatLastStepRef.current[t.id] = stepIndex
-              const rowBuffers = loadedBeatSamplesRef.current?.[t.id] || {}
-              const ctx = audioContextRef.current
-              const { pre, g } = ensureTrackChain(t.id)
               p.rows.forEach((row) => {
                 if (row.steps?.[stepIndex]) {
-                  const buf = rowBuffers[row.id]
-                  if (buf && ctx) {
-                    try {
-                      const src = ctx.createBufferSource()
-                      src.buffer = buf
-                      if (pre) src.connect(pre)
-                      else if (g) src.connect(g)
-                      else if (masterGainRef.current) src.connect(masterGainRef.current)
-                      else src.connect(ctx.destination)
-                      src.start()
-                      activeSourcesRef.current.push(src)
-                      src.onended = () => {
-                        try { src.disconnect() } catch {}
-                        const arr = activeSourcesRef.current
-                        const idx = arr.indexOf(src)
-                        if (idx >= 0) arr.splice(idx, 1)
-                      }
-                    } catch (e) { console.error('beat playback error', e) }
-                  }
+                  const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
+                  const gainLinear = vol / 100
+                  window.api?.backend?.triggerBeat?.(String(t.id), String(row.id), gainLinear)
                 }
               })
             })

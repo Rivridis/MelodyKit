@@ -4,6 +4,7 @@
 #include "BackendHost.h"
 
 #include <juce_core/juce_core.h>
+#include <algorithm>
 #include <iostream>
 
 // SF2 audio callback for TinySoundFont rendering
@@ -128,6 +129,94 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GainAudioCallback)
 };
 
+// Shared beat-sample mixer across all beat tracks
+class BeatAudioCallback : public juce::AudioIODeviceCallback {
+public:
+    BeatAudioCallback(
+        std::map<juce::String, std::map<juce::String, std::shared_ptr<BeatSample>>>& samples,
+        std::map<juce::String, std::vector<BackendHost::BeatVoice>>& voices,
+        juce::CriticalSection& lock)
+        : sampleMap(samples), voiceMap(voices), mapLock(lock) {}
+
+    void audioDeviceIOCallbackWithContext(const float* const* /*inputChannelData*/,
+                                          int /*numInputChannels*/,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& /*context*/) override {
+        if (!outputChannelData || numSamples <= 0 || numOutputChannels <= 0) return;
+
+        // Clear output buffer before mixing beat voices to avoid stale data buzzing
+        for (int ch = 0; ch < numOutputChannels; ++ch) {
+            if (outputChannelData[ch]) {
+                juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+            }
+        }
+
+        const juce::ScopedLock sl(mapLock);
+        juce::ignoreUnused(sampleMap);
+        if (voiceMap.empty()) return;
+
+        for (auto& [trackId, voices] : voiceMap) {
+            juce::ignoreUnused(trackId);
+            for (auto it = voices.begin(); it != voices.end();) {
+                auto& voice = *it;
+                auto samplePtr = voice.sample;
+                if (!samplePtr || samplePtr->buffer.getNumSamples() == 0) {
+                    it = voices.erase(it);
+                    continue;
+                }
+
+                const int sourceSamples = samplePtr->buffer.getNumSamples();
+                const int sourceChannels = samplePtr->buffer.getNumChannels();
+                const double ratio = (currentRate > 0.0) ? (samplePtr->sampleRate / currentRate) : 1.0;
+
+                double pos = voice.position;
+                bool finished = false;
+
+                for (int i = 0; i < numSamples; ++i) {
+                    const int idx = static_cast<int>(pos);
+                    if (idx >= sourceSamples) { finished = true; break; }
+
+                    const double frac = pos - static_cast<double>(idx);
+
+                    for (int ch = 0; ch < numOutputChannels; ++ch) {
+                        if (!outputChannelData[ch]) continue;
+                        const int srcCh = (sourceChannels == 1) ? 0 : juce::jmin(ch, sourceChannels - 1);
+                        const float s0 = samplePtr->buffer.getSample(srcCh, idx);
+                        const float s1 = (idx + 1 < sourceSamples) ? samplePtr->buffer.getSample(srcCh, idx + 1) : 0.0f;
+                        const float blended = static_cast<float>((1.0 - frac) * s0 + frac * s1);
+                        outputChannelData[ch][i] += blended * voice.gain;
+                    }
+
+                    pos += ratio;
+                }
+
+                voice.position = pos;
+                if (finished || pos >= sourceSamples) {
+                    it = voices.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
+
+    void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
+        currentRate = device ? device->getCurrentSampleRate() : 44100.0;
+    }
+
+    void audioDeviceStopped() override {
+        currentRate = 44100.0;
+    }
+
+private:
+    std::map<juce::String, std::map<juce::String, std::shared_ptr<BeatSample>>>& sampleMap;
+    std::map<juce::String, std::vector<BackendHost::BeatVoice>>& voiceMap;
+    juce::CriticalSection& mapLock;
+    double currentRate = 44100.0;
+};
+
 // Simple window to host the plugin's editor
 class PluginEditorWindow : public juce::DocumentWindow {
 public:
@@ -173,10 +262,19 @@ BackendHost::BackendHost() {
 #if JUCE_PLUGINHOST_VST3
     formatManager.addFormat(std::make_unique<juce::VST3PluginFormat>());
 #endif
+    beatFormatManager.registerBasicFormats();
     prepareDevice();
+
+    // Shared beat mixer callback (handles all beat tracks)
+    beatCallback = std::make_unique<BeatAudioCallback>(beatSamples, beatVoices, beatLock);
+    deviceManager.addAudioCallback(beatCallback.get());
 }
 
 BackendHost::~BackendHost() {
+    if (beatCallback) {
+        deviceManager.removeAudioCallback(beatCallback.get());
+        beatCallback.reset();
+    }
     const juce::ScopedLock sl(tracksLock);
     for (auto& [trackId, track] : tracks) {
         if (track.editorWindow) {
@@ -198,6 +296,12 @@ BackendHost::~BackendHost() {
         }
     }
     tracks.clear();
+
+    {
+        const juce::ScopedLock bl(beatLock);
+        beatSamples.clear();
+        beatVoices.clear();
+    }
 }
 
 void BackendHost::prepareDevice() {
@@ -408,6 +512,78 @@ bool BackendHost::setPluginState(const juce::String& trackId, const juce::String
     
     emit("DEBUG SET_STATE: Successfully set state for track " + trackId);
     return true;
+}
+
+bool BackendHost::loadBeatSample(const juce::String& trackId,
+                                 const juce::String& rowId,
+                                 const juce::File& file,
+                                 juce::String& errorMessage) {
+    if (trackId.isEmpty() || rowId.isEmpty()) {
+        errorMessage = "missing-track-or-row";
+        return false;
+    }
+
+    if (!file.existsAsFile()) {
+        errorMessage = "file-not-found: " + file.getFullPathName();
+        return false;
+    }
+
+    std::unique_ptr<juce::AudioFormatReader> reader(beatFormatManager.createReaderFor(file));
+    if (!reader) {
+        errorMessage = "unsupported-format";
+        return false;
+    }
+
+    const int numSamples = static_cast<int>(reader->lengthInSamples);
+    auto sample = std::make_shared<BeatSample>();
+    sample->sampleRate = reader->sampleRate;
+    sample->buffer.setSize(static_cast<int>(reader->numChannels), juce::jmax(1, numSamples));
+    reader->read(&sample->buffer, 0, numSamples, 0, true, true);
+
+    {
+        const juce::ScopedLock slb(beatLock);
+        beatSamples[trackId][rowId] = sample;
+    }
+
+    emit("EVENT BEAT_LOADED " + trackId + " " + rowId + " " + file.getFileName());
+    return true;
+}
+
+void BackendHost::triggerBeat(const juce::String& trackId,
+                              const juce::String& rowId,
+                              float gainLinear) {
+    const juce::ScopedLock sl(beatLock);
+    auto trackIt = beatSamples.find(trackId);
+    if (trackIt == beatSamples.end()) return;
+    auto rowIt = trackIt->second.find(rowId);
+    if (rowIt == trackIt->second.end()) return;
+    auto sample = rowIt->second;
+    if (!sample || sample->buffer.getNumSamples() <= 0) return;
+
+    BeatVoice voice;
+    voice.sample = sample;
+    voice.position = 0.0;
+    voice.gain = juce::jlimit(0.0f, 4.0f, gainLinear);
+    beatVoices[trackId].push_back(voice);
+}
+
+void BackendHost::clearBeatTrack(const juce::String& trackId) {
+    const juce::ScopedLock sl(beatLock);
+    beatSamples.erase(trackId);
+    beatVoices.erase(trackId);
+}
+
+void BackendHost::clearBeatRow(const juce::String& trackId, const juce::String& rowId) {
+    const juce::ScopedLock sl(beatLock);
+    auto trackIt = beatSamples.find(trackId);
+    if (trackIt != beatSamples.end()) {
+        trackIt->second.erase(rowId);
+    }
+    auto voiceIt = beatVoices.find(trackId);
+    if (voiceIt != beatVoices.end()) {
+        auto& v = voiceIt->second;
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const BeatVoice& bv) { return bv.sample && trackIt != beatSamples.end() && (!trackIt->second.count(rowId) || trackIt->second.at(rowId) != bv.sample); }), v.end());
+    }
 }
 
 bool BackendHost::isPluginLoaded(const juce::String& trackId) const {
