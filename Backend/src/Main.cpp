@@ -52,6 +52,50 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         }
         return true;
     }
+    
+    if (command == "LOAD_SF2") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR LOAD_SF2 missing-track-id-or-path");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String path = tokens[1];
+        const juce::File file(path.unquoted());
+        
+        juce::String err;
+        if (!ctx.host.loadSF2(trackId, file, err)) {
+            emit("ERROR LOAD_SF2 " + trackId + " " + err);
+        } else {
+            emit("EVENT READY_SF2 " + trackId);
+        }
+        return true;
+    }
+    
+    if (command == "SET_SF2_PRESET") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 3) {
+            emit("ERROR SET_SF2_PRESET missing-arguments (need trackId bank preset)");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const int bank = tokens[1].getIntValue();
+        const int preset = tokens[2].getIntValue();
+        
+        juce::String err;
+        if (!ctx.host.setSF2Preset(trackId, bank, preset, err)) {
+            emit("ERROR SET_SF2_PRESET " + trackId + " " + err);
+        }
+        return true;
+    }
 
     if (command == "NOTE" || command == "NOTE_ON") {
         juce::StringArray tokens;

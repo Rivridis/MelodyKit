@@ -2,9 +2,8 @@ import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 're
 import { stopAllNotes } from '../utils/soundfontPlayer'
 import { startRecording } from '../utils/exportWav'
 import { encodeToWav } from '../utils/fastWav'
-import { loadSf2Instrument, playSf2Note } from '../utils/spessaSf2'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
-import { playBackendNote, noteNameToMidi } from '@renderer/utils/vstBackend'
+import { playBackendNote, noteNameToMidi, loadSF2 } from '@renderer/utils/vstBackend'
 
 const BEAT_WIDTH = 40
 const TRACK_HEIGHT = 80
@@ -512,31 +511,24 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         try {
           console.log(`Loading instrument for track ${trackId}:`, instrument.name, instrument.samplePath)
 
-          // Use spessasynth_lib for SF2 files
+          // Use C++ backend for SF2 files
           if (instrument.samplePath.toLowerCase().endsWith('.sf2')) {
-            // Load without destination to use shared cache (PianoRoll already loaded this)
-            const sampler = await loadSf2Instrument(
-              instrument.samplePath,
-              audioContextRef.current
-            )
-            // Route synth to this track's pre-gain chain for per-track volume control
-            if (sampler && sampler.synth) {
-              try {
-                const { pre } = ensureTrackChain(trackId)
-                if (pre) {
-                  try { sampler.synth.disconnect() } catch {}
-                  sampler.synth.connect(pre)
-                } else {
-                  const dest = masterGainRef.current || audioContextRef.current.destination
-                  try { sampler.synth.disconnect() } catch {}
-                  sampler.synth.connect(dest)
-                }
-              } catch (e) {
-                console.error(`Failed to route synth for track ${trackId}:`, e)
+            const bank = instrument.bank || 0
+            const preset = instrument.preset || 0
+            const success = await loadSF2(trackId, instrument.samplePath, bank, preset)
+            
+            if (success) {
+              loadedInstrumentsRef.current[trackId] = { 
+                type: 'sf2-backend', 
+                samplePath: instrument.samplePath,
+                bank,
+                preset
               }
+              console.log(`Track ${trackId} SF2 loaded via C++ backend`)
+            } else {
+              console.error(`Failed to load SF2 for track ${trackId}`)
+              loadedInstrumentsRef.current[trackId] = { type: 'none', samplePath: instrument.samplePath }
             }
-            loadedInstrumentsRef.current[trackId] = { type: 'sf2', data: sampler, samplePath: instrument.samplePath }
-            console.log(`Track ${trackId} SF2 loaded via spessasynth_lib`)
           } else {
             // Non-SF2: for now, fallback to oscillator during playback
             loadedInstrumentsRef.current[trackId] = { type: 'none', samplePath: instrument.samplePath }
@@ -860,18 +852,19 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       }
     }
     
-  // If we have a loaded SF2 for this track, use spessasynth_lib. Only fall back on explicit errors.
-    if (loadedInstrument && loadedInstrument.type === 'sf2') {
+  // If we have a loaded SF2 for this track, use C++ backend
+    if (loadedInstrument && loadedInstrument.type === 'sf2-backend') {
       try {
-  console.log(`Using SF2 (spessasynth_lib) for track ${trackId}`)
-        // Scale velocity by track volume so changes are audible even if sampler routes to destination directly
+        console.log(`Using SF2 (C++ backend) for track ${trackId}`)
+        // Scale velocity by track volume
         const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
-        const baseVelocity = 80
-        const velocity = Math.max(1, Math.min(127, Math.round(baseVelocity * (vol / 100))))
-        playSf2Note(loadedInstrument.data, noteName, duration, velocity)
-  // Do not fall back if return value is falsy; spessasynth_lib may not return an object.
+        const baseVelocity = 0.63 // ~80/127
+        const velocity = baseVelocity * (vol / 100)
+        const midiNote = noteNameToMidi(noteName)
+        playBackendNote(trackId, midiNote, velocity, Math.floor(duration * 1000), 1)
+        return
       } catch (error) {
-  console.error('Error playing SF2 (spessasynth_lib):', error)
+        console.error('Error playing SF2 (C++ backend):', error)
         playOscillatorNote(trackId, noteName, duration)
       }
     } else {

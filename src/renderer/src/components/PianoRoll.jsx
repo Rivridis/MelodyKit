@@ -2,9 +2,8 @@ import { useRef, useEffect, useState } from 'react'
 import { Midi } from '@tonejs/midi'
 import InstrumentSelector from './InstrumentSelector'
 import VSTSelector from './VSTSelector'
-import { loadSf2Instrument, playSf2Note, getSf2NoteRange, getSf2KeyLabels } from '@renderer/utils/spessaSf2'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
-import { playBackendNote, noteNameToMidi, backendPanic, openVSTEditor } from '@renderer/utils/vstBackend'
+import { playBackendNote, noteNameToMidi, backendPanic, openVSTEditor, loadSF2, setSF2Preset } from '@renderer/utils/vstBackend'
 
 const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const OCTAVES = [2, 3, 4, 5, 6, 7]
@@ -325,72 +324,47 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         if (loadSessionRef.current === sessionId) setSpessaInstrument(null)
         return
       }
-      // Ensure we have an AudioContext before attempting to load
-      let ctx = audioContextRef.current
-      if (!ctx) {
-        try { ctx = getSharedAudioContext(); audioContextRef.current = ctx } catch {}
-      }
-      if (!ctx) return
+      
       if (loadSessionRef.current === sessionId) setInstrumentLoading(true)
       try {
-        // Proactively stop and disconnect previous preview synth to avoid hearing the old instrument
-        const prev = spessaInstrumentRef.current
-        if (prev) {
-          try { prev.stop() } catch {}
-          try { prev.synth?.disconnect() } catch {}
-        }
         if (selectedInstrument.samplePath && selectedInstrument.samplePath.endsWith('.sf2')) {
-          // Ensure preview chain is properly connected before loading
-          ensurePreviewChainConnected()
-          const handle = await loadSf2Instrument(selectedInstrument.samplePath, ctx)
-          // Route cached preview synth through our preview chain for louder output
-          if (handle && handle.synth) {
-            try {
-              // Ensure synth is connected to preview chain; don't disconnect first
-              // to avoid losing the bank+program selection that was set during load
-              handle.synth.connect(previewGainRef.current)
-            } catch (e) {
-              console.error(`[PianoRoll] Failed to connect synth:`, e)
+          // Use C++ backend to load SF2
+          const bank = selectedInstrument.bank || 0
+          const preset = selectedInstrument.preset || 0
+          const success = await loadSF2(trackId, selectedInstrument.samplePath, bank, preset)
+          
+          if (!success) {
+            console.error('Failed to load SF2 via backend')
+            if (loadSessionRef.current === sessionId) {
+              setInstrumentLoading(false)
+              setSpessaInstrument(null)
             }
+            return
           }
-          // Only apply if this is still the latest request
+          
+          // Mark as loaded
           if (loadSessionRef.current === sessionId) {
-            setSpessaInstrument(handle)
-          }
-          // Query playable note range using spessasynth
-          try {
-            const r = await getSf2NoteRange(selectedInstrument.samplePath, ctx)
-            if (r && typeof r.min === 'number' && typeof r.max === 'number') {
-              if (loadSessionRef.current === sessionId) {
-                playableRangeRef.current = r
-                setPlayableRangeState(r)
-              }
-            }
-          } catch {}
-          // Load per-key labels only if SF2 name contains "drumkit"
-          try {
+            setSpessaInstrument({ backend: true }) // Flag that backend is handling this
+            
+            // Set playable range (SF2 typically supports full MIDI range)
+            playableRangeRef.current = { min: 0, max: 127 }
+            setPlayableRangeState({ min: 0, max: 127 })
+            
+            // Check if it's a drumkit for labels
             const p = String(selectedInstrument.samplePath || '')
             const normalized = p.toLowerCase().replace(/\s+/g, '')
             const shouldLoadLabels = normalized.includes('drumkit')
+            
             if (shouldLoadLabels) {
-              const { labels, isDrumLike } = await getSf2KeyLabels(selectedInstrument.samplePath)
-              if (loadSessionRef.current === sessionId) {
-                setKeyLabels(labels || {})
-                setIsDrumLike(!!isDrumLike)
-              }
+              // For drum kits, set isDrumLike
+              setIsDrumLike(true)
+              // You could add label loading here if needed
+              setKeyLabels({})
             } else {
-              if (loadSessionRef.current === sessionId) {
-                setKeyLabels({})
-                setIsDrumLike(false)
-              }
-            }
-          } catch {
-            if (loadSessionRef.current === sessionId) {
               setKeyLabels({})
               setIsDrumLike(false)
             }
-          }
-          if (loadSessionRef.current === sessionId) {
+            
             setInstrumentLoading(false)
             setShowInstrumentSelector(false)
           }
@@ -405,7 +379,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
           }
         }
       } catch (err) {
-        console.error('Failed to load shared SF2 sampler:', err)
+        console.error('Failed to load SF2 via backend:', err)
         if (loadSessionRef.current === sessionId) {
           setInstrumentLoading(false)
           setSpessaInstrument(null)
@@ -417,7 +391,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       }
     }
     loadSharedSampler()
-  }, [selectedInstrument])
+  }, [selectedInstrument, trackId])
   // Helper: convert note name like C4 to MIDI number
   const noteNameToMidi = (noteName) => {
     const map = { C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11 }
@@ -1019,19 +993,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       console.warn('No audio context available')
       return
     }
-    
-    // If we have a loaded smplr instrument, use it
-  if (spessaInstrumentRef.current && !instrumentLoading) {
+    // If we have a loaded SF2 instrument, use the backend
+    if (spessaInstrumentRef.current && !instrumentLoading) {
       try {
-        // Resume audio context if suspended (required for user interaction)
-        if (audioContextRef.current.state === 'suspended') {
-          audioContextRef.current.resume()
-        }
-  // Align preview velocity with Track view baseline for consistent loudness
-  playSf2Note(spessaInstrumentRef.current, noteName, duration, 80)
+        // Use backend to play the note
+        const midiNote = noteNameToMidi(noteName)
+        const vel = 80 / 127.0 // normalize to 0..1
+        playBackendNote(trackId, midiNote, vel, Math.floor(duration * 1000), 1)
       } catch (error) {
-        console.error('Error playing smplr note:', error)
-        console.error('Error stack:', error.stack)
+        console.error('Error playing backend note:', error)
         // Fallback to oscillator
         playOscillatorNote(noteName, duration)
       }
@@ -1053,8 +1023,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     const inSec = Math.max(0, whenSec - now)
     const sessionId = playbackSessionRef.current
     
-    // Route to VST backend if enabled (use ref for immediate state)
-    if (useVSTBackendRef.current) {
+    // Route to backend if VST or SF2 is loaded (use ref for immediate state)
+    if (useVSTBackendRef.current || spessaInstrumentRef.current) {
       const id = setTimeout(() => {
         if (playbackSessionRef.current === sessionId) {
           const midiNote = noteNameToMidi(noteName)
@@ -1067,47 +1037,35 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       return
     }
     
-    if (spessaInstrumentRef.current && !instrumentLoading) {
-      // Use setTimeout to call sampler near its target time; we schedule ahead so drift is minimal
-      const id = setTimeout(() => {
-        // Only play if still the same playback session (not paused/stopped)
-        if (playbackSessionRef.current === sessionId) {
-          try { playSf2Note(spessaInstrumentRef.current, noteName, Math.max(0.01, durationSec || 0.3), velocity) } catch {}
-        }
-        scheduledTimeoutsRef.current.delete(id)
-      }, Math.floor(inSec * 1000))
-      scheduledTimeoutsRef.current.add(id)
-    } else {
-      // Oscillator fallback: match Track view envelope and routing via preview limiter
-      // Use setTimeout to allow session ID check (prevents ghost notes after pause)
-      const id = setTimeout(() => {
-        // Only play if still the same playback session (not paused/stopped)
-        if (playbackSessionRef.current === sessionId) {
-          try {
-            const oscCtx = ctx
-            const oscillator = oscCtx.createOscillator()
-            const gainNode = oscCtx.createGain()
-            oscillator.connect(gainNode)
-            // Prefer preview chain (gain -> soft limiter) for consistent tone
-            const dest = previewGainRef.current || oscCtx.destination
-            gainNode.connect(dest)
-            oscillator.frequency.value = noteToFrequency(noteName)
-            oscillator.type = 'sine'
-            const total = Math.max(0.01, durationSec || 0.3)
-            const fadeOut = Math.min(total * 0.1, 0.05)
-            const sustain = Math.max(0, total - fadeOut)
-            // Start at modest level to match timeline fallback
-            gainNode.gain.setValueAtTime(0.2, ctx.currentTime)
-            if (sustain > 0) gainNode.gain.setValueAtTime(0.2, ctx.currentTime + sustain)
-            gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + total)
-            oscillator.start(ctx.currentTime)
-            oscillator.stop(ctx.currentTime + total)
-          } catch {}
-        }
-        scheduledTimeoutsRef.current.delete(id)
-      }, Math.floor(inSec * 1000))
-      scheduledTimeoutsRef.current.add(id)
-    }
+    // Oscillator fallback for when no instrument is loaded
+    // Use setTimeout to allow session ID check (prevents ghost notes after pause)
+    const id = setTimeout(() => {
+      // Only play if still the same playback session (not paused/stopped)
+      if (playbackSessionRef.current === sessionId) {
+        try {
+          const oscCtx = ctx
+          const oscillator = oscCtx.createOscillator()
+          const gainNode = oscCtx.createGain()
+          oscillator.connect(gainNode)
+          // Prefer preview chain (gain -> soft limiter) for consistent tone
+          const dest = previewGainRef.current || oscCtx.destination
+          gainNode.connect(dest)
+          oscillator.frequency.value = noteToFrequency(noteName)
+          oscillator.type = 'sine'
+          const total = Math.max(0.01, durationSec || 0.3)
+          const fadeOut = Math.min(total * 0.1, 0.05)
+          const sustain = Math.max(0, total - fadeOut)
+          // Start at modest level to match timeline fallback
+          gainNode.gain.setValueAtTime(0.2, ctx.currentTime)
+          if (sustain > 0) gainNode.gain.setValueAtTime(0.2, ctx.currentTime + sustain)
+          gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + total)
+          oscillator.start(ctx.currentTime)
+          oscillator.stop(ctx.currentTime + total)
+        } catch {}
+      }
+      scheduledTimeoutsRef.current.delete(id)
+    }, Math.floor(inSec * 1000))
+    scheduledTimeoutsRef.current.add(id)
   }
 
 

@@ -27,8 +27,10 @@ const api = {
 api.backend = {
   // send raw line to backend
   send: (line) => ipcRenderer.invoke('backend:send', line),
-  // load an SF2 from resources (relative path under resources/)
-  loadSF2: (relativePath) => ipcRenderer.invoke('backend:load-sf2', relativePath),
+  // load an SF2 from resources (relative path under resources/) for a specific track
+  loadSF2: (trackId, relativePath) => ipcRenderer.invoke('backend:load-sf2', { trackId, relativePath }),
+  // set SF2 preset (bank and preset number) for a specific track
+  setSF2Preset: (trackId, bank, preset) => ipcRenderer.invoke('backend:set-sf2-preset', { trackId, bank, preset }),
   // load a VST/VST3 plugin by absolute path for a specific track
   loadVST: (trackId, pluginPath) => ipcRenderer.invoke('backend:load-vst', { trackId, pluginPath }),
   // scan for available VST3 plugins

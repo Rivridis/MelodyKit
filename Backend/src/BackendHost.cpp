@@ -1,7 +1,90 @@
+#define TSF_IMPLEMENTATION
+#include "../TinySoundFont/tsf.h"
+
 #include "BackendHost.h"
 
 #include <juce_core/juce_core.h>
 #include <iostream>
+
+// SF2 audio callback for TinySoundFont rendering
+class SF2AudioCallback : public juce::AudioIODeviceCallback {
+public:
+    SF2AudioCallback(tsf* soundFont, float* gainPtr, double sampleRate)
+        : sf(soundFont), gainLinearPtr(gainPtr), bufferSampleRate(sampleRate) {
+        if (sf) {
+            tsf_set_output(sf, TSF_STEREO_INTERLEAVED, (int)sampleRate, 0.0f);
+            tsf_set_max_voices(sf, 256); // Pre-allocate voices for thread safety
+        }
+    }
+    
+    void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
+                                          int numInputChannels,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& context) override {
+        if (!sf || numOutputChannels < 1) {
+            // Clear output
+            for (int ch = 0; ch < numOutputChannels; ++ch) {
+                if (outputChannelData[ch]) {
+                    juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+                }
+            }
+            return;
+        }
+        
+        // Render SF2 audio (interleaved stereo)
+        tempBuffer.resize(numSamples * 2); // stereo interleaved
+        tsf_render_float(sf, tempBuffer.data(), numSamples, 0);
+        
+        // Deinterleave and apply gain
+        const float gain = *gainLinearPtr;
+        if (numOutputChannels >= 2) {
+            // Stereo output
+            for (int i = 0; i < numSamples; ++i) {
+                outputChannelData[0][i] = tempBuffer[i * 2] * gain;
+                outputChannelData[1][i] = tempBuffer[i * 2 + 1] * gain;
+            }
+        } else {
+            // Mono output - mix stereo to mono
+            for (int i = 0; i < numSamples; ++i) {
+                outputChannelData[0][i] = (tempBuffer[i * 2] + tempBuffer[i * 2 + 1]) * 0.5f * gain;
+            }
+        }
+        
+        // Clear additional channels
+        for (int ch = 2; ch < numOutputChannels; ++ch) {
+            if (outputChannelData[ch]) {
+                juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+            }
+        }
+    }
+    
+    void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
+        if (device && sf) {
+            double newRate = device->getCurrentSampleRate();
+            if (newRate != bufferSampleRate) {
+                bufferSampleRate = newRate;
+                tsf_set_output(sf, TSF_STEREO_INTERLEAVED, (int)newRate, 0.0f);
+            }
+        }
+    }
+    
+    void audioDeviceStopped() override {
+        if (sf) {
+            tsf_note_off_all(sf);
+        }
+    }
+    
+    tsf* getSoundFont() const { return sf; }
+    
+private:
+    tsf* sf;
+    float* gainLinearPtr;
+    double bufferSampleRate;
+    std::vector<float> tempBuffer;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SF2AudioCallback)
+};
 
 // Custom audio callback that wraps AudioProcessorPlayer and applies gain
 class GainAudioCallback : public juce::AudioIODeviceCallback {
@@ -100,11 +183,18 @@ BackendHost::~BackendHost() {
             track.editorWindow->setVisible(false);
             track.editorWindow.reset();
         }
+        if (track.sf2Callback) {
+            deviceManager.removeAudioCallback(track.sf2Callback.get());
+        }
         if (track.gainCallback) {
             deviceManager.removeAudioCallback(track.gainCallback.get());
         }
         if (track.player) {
             track.player->setProcessor(nullptr);
+        }
+        if (track.soundFont) {
+            tsf_close(track.soundFont);
+            track.soundFont = nullptr;
         }
     }
     tracks.clear();
@@ -220,12 +310,20 @@ void BackendHost::unloadPlugin(const juce::String& trackId) {
         it->second.editorWindow.reset();
     }
     
+    if (it->second.sf2Callback) {
+        deviceManager.removeAudioCallback(it->second.sf2Callback.get());
+    }
+    
     if (it->second.gainCallback) {
         deviceManager.removeAudioCallback(it->second.gainCallback.get());
     }
     
     if (it->second.player) {
         it->second.player->setProcessor(nullptr);
+    }
+    
+    if (it->second.soundFont) {
+        tsf_close(it->second.soundFont);
     }
     
     tracks.erase(it);
@@ -325,14 +423,176 @@ juce::String BackendHost::getLoadedPluginName(const juce::String& trackId) const
     return it->second.plugin->getName();
 }
 
+bool BackendHost::loadSF2(const juce::String& trackId, const juce::File& file, juce::String& errorMessage) {
+    prepareDevice();
+    
+    if (!file.existsAsFile()) {
+        errorMessage = "SF2 file not found: " + file.getFullPathName();
+        return false;
+    }
+    
+    // Load the SoundFont using TinySoundFont
+    tsf* sf = tsf_load_filename(file.getFullPathName().toRawUTF8());
+    if (!sf) {
+        errorMessage = "Failed to load SF2 file (invalid format or corrupted)";
+        return false;
+    }
+    
+    const juce::ScopedLock sl(tracksLock);
+    
+    // Unload existing plugin/SF2 for this track if any
+    auto it = tracks.find(trackId);
+    if (it != tracks.end()) {
+        if (it->second.sf2Callback) {
+            deviceManager.removeAudioCallback(it->second.sf2Callback.get());
+        }
+        if (it->second.gainCallback) {
+            deviceManager.removeAudioCallback(it->second.gainCallback.get());
+        }
+        if (it->second.player) {
+            it->second.player->setProcessor(nullptr);
+        }
+        if (it->second.soundFont) {
+            tsf_close(it->second.soundFont);
+        }
+        it->second.editorWindow.reset();
+        it->second.plugin.reset();
+        it->second.activeNoteTimers.clear();
+    }
+    
+    // Create new track state for SF2
+    TrackState& track = tracks[trackId];
+    track.soundFont = sf;
+    track.sf2Name = file.getFileNameWithoutExtension();
+    track.gainLinear = 1.0f;
+    
+    // Configure TinySoundFont
+    const double sr = getSampleRate();
+    track.sf2Callback = std::make_unique<SF2AudioCallback>(sf, &track.gainLinear, sr);
+    
+    // Find and set the first available preset
+    int presetIndex = tsf_get_presetindex(sf, 0, 0);
+    if (presetIndex < 0) {
+        // Bank 0, Preset 0 doesn't exist, use the first available preset
+        int presetCount = tsf_get_presetcount(sf);
+        if (presetCount > 0) {
+            presetIndex = 0;
+            const char* presetName = tsf_get_presetname(sf, 0);
+            emit("EVENT SF2_USING_FIRST_PRESET " + trackId + " " + juce::String(presetName ? presetName : "Unknown"));
+        }
+    }
+    
+    if (presetIndex >= 0) {
+        // Set preset for all channels
+        for (int ch = 0; ch < 16; ++ch) {
+            tsf_channel_set_presetindex(sf, ch, presetIndex);
+        }
+        track.sf2CurrentBank = 0;
+        track.sf2CurrentPreset = 0;
+    }
+    
+    // Add to audio device
+    deviceManager.addAudioCallback(track.sf2Callback.get());
+    
+    emit("EVENT LOADED_SF2 " + trackId + " " + track.sf2Name);
+    return true;
+}
+
+bool BackendHost::setSF2Preset(const juce::String& trackId, int bank, int preset, juce::String& errorMessage) {
+    const juce::ScopedLock sl(tracksLock);
+    
+    auto it = tracks.find(trackId);
+    if (it == tracks.end() || !it->second.soundFont) {
+        errorMessage = "No SF2 loaded for track " + trackId;
+        return false;
+    }
+    
+    TrackState& track = it->second;
+    int presetIndex = tsf_get_presetindex(track.soundFont, bank, preset);
+    
+    // If exact preset not found, try to use first available preset
+    if (presetIndex < 0) {
+        int presetCount = tsf_get_presetcount(track.soundFont);
+        if (presetCount > 0) {
+            presetIndex = 0;
+            const char* presetName = tsf_get_presetname(track.soundFont, 0);
+            emit("EVENT SF2_PRESET_FALLBACK " + trackId + " requested_bank=" + juce::String(bank) + 
+                 " requested_preset=" + juce::String(preset) + " using_preset=0 " + 
+                 juce::String(presetName ? presetName : "Unknown"));
+            
+            // Set the first available preset
+            for (int ch = 0; ch < 16; ++ch) {
+                tsf_channel_set_presetindex(track.soundFont, ch, 0);
+            }
+            track.sf2CurrentBank = 0;
+            track.sf2CurrentPreset = 0;
+            return true;
+        } else {
+            errorMessage = "Preset not found: bank=" + juce::String(bank) + " preset=" + juce::String(preset) + " and no presets available";
+            return false;
+        }
+    }
+    
+    // Set preset for all channels (typically use channel 0 for single-track playback)
+    for (int ch = 0; ch < 16; ++ch) {
+        tsf_channel_set_bank_preset(track.soundFont, ch, bank, preset);
+    }
+    
+    track.sf2CurrentBank = bank;
+    track.sf2CurrentPreset = preset;
+    
+    const char* presetName = tsf_get_presetname(track.soundFont, presetIndex);
+    emit("EVENT SF2_PRESET " + trackId + " " + juce::String(bank) + " " + juce::String(preset) + " " + juce::String(presetName ? presetName : "Unknown"));
+    
+    return true;
+}
+
+bool BackendHost::isSF2Loaded(const juce::String& trackId) const {
+    const juce::ScopedLock sl(tracksLock);
+    auto it = tracks.find(trackId);
+    return it != tracks.end() && it->second.soundFont != nullptr;
+}
+
 bool BackendHost::playNote(const juce::String& trackId, int midiNote, float velocity01, int durationMs, int channel) {
     const juce::ScopedLock sl(tracksLock);
     
     auto it = tracks.find(trackId);
-    if (it == tracks.end() || !it->second.plugin) return false;
+    if (it == tracks.end()) return false;
     
     TrackState& track = it->second;
     velocity01 = juce::jlimit(0.0f, 1.0f, velocity01);
+    
+    // Handle SF2 playback
+    if (track.soundFont) {
+        // Play note on SF2
+        tsf_channel_note_on(track.soundFont, channel - 1, midiNote, velocity01); // TSF uses 0-based channels
+        
+        // Schedule note-off using a Timer
+        const int key = (channel << 8) | midiNote;
+        track.activeNoteTimers.erase(key);
+        
+        class SF2NoteOffTimer : public juce::Timer {
+        public:
+            SF2NoteOffTimer(tsf* sf, int note, int chan) : soundFont(sf), midiNote(note), tsfChannel(chan) {}
+            void timerCallback() override {
+                if (soundFont) {
+                    tsf_channel_note_off(soundFont, tsfChannel, midiNote);
+                }
+            }
+        private:
+            tsf* soundFont;
+            int midiNote;
+            int tsfChannel;
+        };
+        
+        auto timer = std::make_unique<SF2NoteOffTimer>(track.soundFont, midiNote, channel - 1);
+        timer->startTimer(durationMs);
+        track.activeNoteTimers[key].timer = std::move(timer);
+        return true;
+    }
+    
+    // Handle VST plugin playback
+    if (!track.plugin) return false;
     
     // Send note-on immediately
     juce::MidiMessage on = juce::MidiMessage::noteOn(channel, midiNote, velocity01);
@@ -381,8 +641,16 @@ void BackendHost::sendNoteOff(const juce::String& trackId, int midiNote, int cha
     const juce::ScopedLock sl(tracksLock);
     
     auto it = tracks.find(trackId);
-    if (it == tracks.end() || !it->second.player) return;
+    if (it == tracks.end()) return;
     
+    // Handle SF2
+    if (it->second.soundFont) {
+        tsf_channel_note_off(it->second.soundFont, channel - 1, midiNote);
+        return;
+    }
+    
+    // Handle VST plugin
+    if (!it->second.player) return;
     juce::MidiMessage off = juce::MidiMessage::noteOff(channel, midiNote);
     it->second.player->getMidiMessageCollector().addMessageToQueue(off);
 }
@@ -394,9 +662,18 @@ void BackendHost::allNotesOff(const juce::String& trackId) {
         // All tracks
         for (auto& [tid, track] : tracks) {
             track.activeNoteTimers.clear();
-            for (int ch = 1; ch <= 16; ++ch) {
-                auto msg = juce::MidiMessage::allNotesOff(ch);
-                track.player->getMidiMessageCollector().addMessageToQueue(msg);
+            
+            if (track.soundFont) {
+                // SF2 all notes off
+                for (int ch = 0; ch < 16; ++ch) {
+                    tsf_channel_note_off_all(track.soundFont, ch);
+                }
+            } else if (track.player) {
+                // VST plugin all notes off
+                for (int ch = 1; ch <= 16; ++ch) {
+                    auto msg = juce::MidiMessage::allNotesOff(ch);
+                    track.player->getMidiMessageCollector().addMessageToQueue(msg);
+                }
             }
         }
     } else {
@@ -405,9 +682,18 @@ void BackendHost::allNotesOff(const juce::String& trackId) {
         if (it == tracks.end()) return;
         
         it->second.activeNoteTimers.clear();
-        for (int ch = 1; ch <= 16; ++ch) {
-            auto msg = juce::MidiMessage::allNotesOff(ch);
-            it->second.player->getMidiMessageCollector().addMessageToQueue(msg);
+        
+        if (it->second.soundFont) {
+            // SF2 all notes off
+            for (int ch = 0; ch < 16; ++ch) {
+                tsf_channel_note_off_all(it->second.soundFont, ch);
+            }
+        } else if (it->second.player) {
+            // VST plugin all notes off
+            for (int ch = 1; ch <= 16; ++ch) {
+                auto msg = juce::MidiMessage::allNotesOff(ch);
+                it->second.player->getMidiMessageCollector().addMessageToQueue(msg);
+            }
         }
     }
 }

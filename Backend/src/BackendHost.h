@@ -9,9 +9,13 @@
 #include <string>
 #include <vector>
 
+// Forward declare TSF type
+typedef struct tsf tsf;
+
 // Forward declaration
 class PluginEditorWindow;
 class GainAudioCallback;
+class SF2AudioCallback;
 
 // MIDI note event for rendering
 struct MidiNoteEvent {
@@ -36,8 +40,15 @@ public:
 
     // Loads a plugin for a specific track ID. Returns false and fills errorMessage on failure.
     bool loadPlugin(const juce::String& trackId, const juce::File& file, juce::String& errorMessage);
+    
+    // Loads a SoundFont2 (.sf2) file for a specific track ID
+    bool loadSF2(const juce::String& trackId, const juce::File& file, juce::String& errorMessage);
+    
+    // Set the preset/bank for an SF2 track
+    bool setSF2Preset(const juce::String& trackId, int bank, int preset, juce::String& errorMessage);
 
     bool isPluginLoaded(const juce::String& trackId) const;
+    bool isSF2Loaded(const juce::String& trackId) const;
     juce::String getLoadedPluginName(const juce::String& trackId) const;
 
     // Sends a note on + scheduled note off to the track's plugin.
@@ -99,6 +110,13 @@ private:
         std::unique_ptr<GainAudioCallback> gainCallback;
         std::unique_ptr<PluginEditorWindow> editorWindow;
         float gainLinear = 1.0f; // Linear gain multiplier (0.0 to ~2.0)
+        
+        // SF2 SoundFont support
+        tsf* soundFont = nullptr;
+        std::unique_ptr<SF2AudioCallback> sf2Callback;
+        juce::String sf2Name;
+        int sf2CurrentBank = 0;
+        int sf2CurrentPreset = 0;
         
         // Track active timers for scheduled note-offs
         struct NoteOffTimer {

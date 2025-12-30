@@ -12,6 +12,8 @@ export function initBackend() {
       backendReady = true
     } else if (line.startsWith('EVENT LOADED')) {
       backendReady = true
+    } else if (line.startsWith('EVENT READY_SF2') || line.startsWith('EVENT LOADED_SF2')) {
+      backendReady = true
     } else if (line.startsWith('ERROR')) {
       console.error('[Backend]', line)
     }
@@ -38,6 +40,45 @@ export async function loadVST(trackId, pluginPath) {
     return true
   } catch (e) {
     console.error(`Error loading VST for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Load an SF2 SoundFont from resources for a specific track
+export async function loadSF2(trackId, relativePath, bank = 0, preset = 0) {
+  try {
+    const res = await window.api.backend.loadSF2(String(trackId), relativePath)
+    if (!res.ok) {
+      console.error(`Failed to load SF2 for track ${trackId}:`, res.error)
+      return false
+    }
+    backendReady = true
+    
+    // Set the preset (bank and preset number)
+    try {
+      await window.api.backend.setSF2Preset(String(trackId), bank, preset)
+    } catch (e) {
+      console.warn(`Failed to set SF2 preset for track ${trackId}:`, e)
+    }
+    
+    return true
+  } catch (e) {
+    console.error(`Error loading SF2 for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Set SF2 preset for a specific track
+export async function setSF2Preset(trackId, bank, preset) {
+  try {
+    const res = await window.api.backend.setSF2Preset(String(trackId), bank, preset)
+    if (!res.ok) {
+      console.error(`Failed to set SF2 preset for track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error setting SF2 preset for track ${trackId}:`, e)
     return false
   }
 }

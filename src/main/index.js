@@ -211,14 +211,28 @@ app.whenReady().then(() => {
   })
 
   // Higher-level helpers used by renderer
-  ipcMain.handle('backend:load-sf2', async (event, relativePath) => {
+  ipcMain.handle('backend:load-sf2', async (event, { trackId, relativePath }) => {
     try {
+      if (!trackId) {
+        return { ok: false, error: 'missing-track-id' }
+      }
       const normalized = relativePath.startsWith('resources/')
         ? relativePath.replace(/^resources\//, '')
         : relativePath
       const fullPath = getResource(normalized)
       if (!fs.existsSync(fullPath)) return { ok: false, error: 'file-not-found', path: fullPath }
-      return sendToBackend(`LOAD ${fullPath}`)
+      return sendToBackend(`LOAD_SF2 ${trackId} "${fullPath}"`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:set-sf2-preset', async (event, { trackId, bank = 0, preset = 0 }) => {
+    try {
+      if (!trackId) {
+        return { ok: false, error: 'missing-track-id' }
+      }
+      return sendToBackend(`SET_SF2_PRESET ${trackId} ${bank} ${preset}`)
     } catch (e) {
       return { ok: false, error: String(e) }
     }
