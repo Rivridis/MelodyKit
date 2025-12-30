@@ -11,6 +11,7 @@ const api = {
   saveProjectToPath: (project, filePath) => ipcRenderer.invoke('project:save-to-path', { project, filePath }),
   openMidi: () => ipcRenderer.invoke('midi:open'),
   readAudioFile: (filePath) => ipcRenderer.invoke('audio:read', filePath),
+  writeTempWav: (bytes, name) => ipcRenderer.invoke('audio:write-temp-wav', { bytes, name }),
   openAudioFiles: () => ipcRenderer.invoke('audio:open'),
   sequencer: {
     listSounds: () => ipcRenderer.invoke('sequencer:listSounds')

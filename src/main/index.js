@@ -867,6 +867,22 @@ app.whenReady().then(() => {
     }
   })
 
+  // Write raw WAV bytes to a temporary file and return the path (no dialog)
+  ipcMain.handle('audio:write-temp-wav', async (event, { bytes, name }) => {
+    try {
+      if (!Array.isArray(bytes)) {
+        return { ok: false, error: 'Invalid bytes' }
+      }
+      const tempName = name || `melodykit_audio_${Date.now()}.wav`
+      const tempPath = path.join(app.getPath('temp'), tempName)
+      fs.writeFileSync(tempPath, Buffer.from(bytes))
+      return { ok: true, path: tempPath }
+    } catch (error) {
+      console.error('Error writing temp WAV:', error)
+      return { ok: false, error: String(error) }
+    }
+  })
+
   createWindow()
 
   app.on('activate', function () {

@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 're
 import { stopAllNotes } from '../utils/soundfontPlayer'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
 import { playBackendNote, noteNameToMidi, loadSF2 } from '@renderer/utils/vstBackend'
+import { encodeToWav } from '@renderer/utils/fastWav'
 
 const BEAT_WIDTH = 40
 const TRACK_HEIGHT = 80
@@ -1643,21 +1644,63 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         }
       })
 
-      // Collect audio clips (backend will read from disk)
+      // Collect audio clips (ensure a readable file exists; fallback to temp WAV if needed)
       const audioPayload = []
-      tracks.forEach((t) => {
-        if (t.type !== 'audio') return
-        const clipPath = t.audioClip?.path || t.audioClip?.filePath
-        if (!clipPath) return
+      for (const t of tracks) {
+        if (t.type !== 'audio') continue
+
         const startBeat = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
         const trackGain = Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100))) / 100
-        audioPayload.push({
-          trackId: String(t.id),
-          path: clipPath,
-          startTime: startBeat * beatDuration,
-          gain: trackGain
-        })
-      })
+
+        // Try to use on-disk path if readable
+        const candidatePath = t.audioClip?.path || t.audioClip?.filePath
+        let finalPath = null
+        if (candidatePath) {
+          try {
+            const probe = await window.api.readAudioFile(candidatePath)
+            if (probe?.ok) {
+              finalPath = candidatePath
+            }
+          } catch (e) {
+            console.warn('Audio probe failed, will fallback to temp WAV:', e)
+          }
+        }
+
+        // If path is missing/unreadable, fall back to decoded buffer -> temp WAV
+        if (!finalPath) {
+          const buf = loadedAudioClipsRef.current?.[t.id]?.buffer
+          if (buf) {
+            try {
+              const channels = []
+              const chCount = buf.numberOfChannels || buf.getNumberOfChannels?.() || 0
+              for (let ch = 0; ch < chCount; ch++) {
+                channels.push(buf.getChannelData(ch))
+              }
+              const wavBytes = encodeToWav({ channels, sampleRate: buf.sampleRate || buf.context?.sampleRate || 44100 })
+              const tempName = `${t.audioClip?.name || 'audio'}_${Date.now()}.wav`
+              const writeRes = await window.api.writeTempWav(Array.from(wavBytes), tempName)
+              if (writeRes?.ok) {
+                finalPath = writeRes.path
+              } else {
+                console.error('Failed to write temp WAV for audio track', t.id, writeRes?.error)
+              }
+            } catch (e) {
+              console.error('Temp WAV fallback failed for audio track', t.id, e)
+            }
+          }
+        }
+
+        if (finalPath) {
+          audioPayload.push({
+            trackId: String(t.id),
+            path: finalPath,
+            startTime: startBeat * beatDuration,
+            gain: trackGain
+          })
+        } else {
+          console.warn('Skipping audio track with no readable file:', t.id)
+        }
+      }
 
       const hasData = (notePayload.length + beatPayload.length + audioPayload.length) > 0
       if (!hasData) {
