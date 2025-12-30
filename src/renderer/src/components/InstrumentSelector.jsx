@@ -172,14 +172,14 @@ function InstrumentSelector({ isOpen, onClose, onSelectInstrument, currentInstru
                     disabled={isLoadingInstrument}
                     className={`group relative p-6 rounded-xl transition-all duration-200 flex flex-col items-center gap-3 ${
                       currentInstrument?.name === instrument.name
-                        ? 'bg-blue-600 shadow-lg shadow-blue-500/50 scale-105'
+                        ? 'bg-amber-600 shadow-lg shadow-amber-500/40 scale-105'
                         : 'bg-zinc-800/80 hover:bg-zinc-700/80'
                     } ${isLoadingInstrument ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
                   >
                     {/* Selection indicator */}
                     {currentInstrument?.name === instrument.name && !isLoadingInstrument && (
                       <div className="absolute top-2 right-2 w-5 h-5 bg-white rounded-full flex items-center justify-center">
-                        <span className="text-blue-600 text-xs">✓</span>
+                        <span className="text-amber-600 text-xs">✓</span>
                       </div>
                     )}
 

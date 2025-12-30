@@ -1765,7 +1765,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             disabled={isRecording}
             title="Rewind to start"
             aria-label="Rewind to start"
-            className="inline-flex items-center justify-center h-9 w-9 rounded-md bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white shadow focus:outline-none focus:ring-2 focus:ring-emerald-400/60"
+            className="inline-flex items-center justify-center h-9 w-9 rounded-md bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white shadow focus:outline-none focus:ring-2 focus:ring-amber-500/60"
           >
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
               <path d="M11 7l-6 5 6 5V7zm8 0l-6 5 6 5V7z"></path>
@@ -1777,7 +1777,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             disabled={isRecording || isRestoring || tracks.length === 0}
             title={isRestoring ? 'Loading VST presets...' : (isPlaying ? 'Pause' : 'Play')}
             aria-label={isRestoring ? 'Loading VST presets' : (isPlaying ? 'Pause' : 'Play')}
-            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed text-white shadow focus:outline-none focus:ring-2 focus:ring-emerald-400/60"
+            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed text-white shadow focus:outline-none focus:ring-2 focus:ring-amber-500/60"
           >
             {isPlaying ? (
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
@@ -1800,7 +1800,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         <button
           onClick={handleSaveWav}
           disabled={isRecording || isPlaying}
-          className="inline-flex items-center justify-center h-9 px-3 bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors ring-1 ring-inset ring-emerald-400/40 text-sm"
+          className="inline-flex items-center justify-center h-9 px-3 bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors ring-1 ring-inset ring-amber-500/50 text-sm"
           title="Record and save mix to WAV"
         >
           {isRecording ? 'Saving…' : 'Export'}
@@ -1828,7 +1828,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 setBpmInput('120')
               }
             }}
-            className="h-9 w-16 px-2 bg-zinc-800 text-white rounded-md border border-zinc-700 focus:border-blue-500 focus:outline-none text-sm"
+            className="h-9 w-16 px-2 bg-zinc-800 text-white rounded-md border border-zinc-700 focus:border-amber-500 focus:outline-none text-sm"
           />
         </div>
 
@@ -1950,7 +1950,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                             try { pre.gain.setValueAtTime(preTarget, audioContextRef.current.currentTime) } catch { pre.gain.value = preTarget }
                           }
                         }}
-                        className="appearance-none w-full h-1 bg-zinc-700 rounded outline-none focus:ring-2 focus:ring-blue-500"
+                        className="appearance-none w-full h-1 bg-zinc-700 rounded outline-none focus:ring-2 focus:ring-amber-500"
                         style={{ pointerEvents: 'auto' }}
                       />
                       <span className="text-xs text-zinc-300 select-none" style={{ pointerEvents: 'auto', width: 34, textAlign: 'right' }}>{value}%</span>

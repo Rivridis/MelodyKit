@@ -108,7 +108,7 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
                 className={`
                   mb-2 p-3 rounded-lg cursor-pointer transition-all
                   ${selectedTrackId === track.id 
-                    ? 'bg-zinc-800 ring-2 ring-blue-500' 
+                    ? 'bg-zinc-800 ring-2 ring-amber-500' 
                     : 'bg-zinc-800/50 hover:bg-zinc-800'
                   }
                 `}
@@ -129,7 +129,7 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
                         onChange={(e) => setEditName(e.target.value)}
                         onBlur={() => handleRenameSubmit(track.id)}
                         onKeyDown={(e) => handleKeyDown(e, track.id)}
-                        className="w-full bg-zinc-700 text-white px-2 py-1 rounded text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full bg-zinc-700 text-white px-2 py-1 rounded text-sm outline-none focus:ring-2 focus:ring-amber-500"
                         autoFocus
                         onClick={(e) => e.stopPropagation()}
                       />

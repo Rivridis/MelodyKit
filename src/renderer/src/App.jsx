@@ -55,6 +55,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
   const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
   const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
+  const [showWelcome, setShowWelcome] = useState(true)
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
 
@@ -62,6 +63,11 @@ function App() {
   useEffect(() => {
     initBackend()
   }, [])
+
+  // Hide welcome overlay once any track exists
+  useEffect(() => {
+    if (tracks.length > 0) setShowWelcome(false)
+  }, [tracks.length])
 
   // Add new track
   const handleAddTrack = () => {
@@ -672,6 +678,53 @@ function App() {
         loading={isLoading || isRestoring}
         isAutosaving={isAutosaving}
       />
+      {showWelcome && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 backdrop-blur">
+          <div className="w-[min(640px,96vw)] max-h-[92vh] overflow-auto rounded-[28px] border border-zinc-700/70 bg-gradient-to-br from-zinc-900 via-zinc-900/90 to-amber-900/20 p-8 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.7)]">
+            <div className="flex items-start gap-4">
+              <div className="mt-1 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-400/15 ring-1 ring-amber-300/40 shadow-inner">
+                <span className="text-lg font-semibold text-amber-200">♪</span>
+              </div>
+              <div className="flex-1 space-y-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">New Session</p>
+                <h1 className="text-3xl font-semibold text-white">Welcome to MelodyKit</h1>
+                <p className="text-sm leading-relaxed text-zinc-200">
+                  Shape ideas like a professional! Add a track, drop in a loop, or open an existing project.
+                </p>
+                <p className="text-sm leading-relaxed text-zinc-300">
+                  Need a great free synth? Grab Surge XT below and load it per track to craft your sound.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-4 pl-14 sm:pl-16">
+              <div className="flex flex-wrap gap-2 text-xs text-zinc-200">
+                <span className="rounded-full border border-zinc-700/70 bg-zinc-800/60 px-3 py-1">Add MIDI or beat tracks</span>
+                <span className="rounded-full border border-zinc-700/70 bg-zinc-800/60 px-3 py-1">Load VSTs per track</span>
+                <span className="rounded-full border border-zinc-700/70 bg-zinc-800/60 px-3 py-1">Import and arrange audio</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  className="inline-flex items-center justify-center rounded-xl bg-white/90 px-4 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-white"
+                  onClick={() => setShowWelcome(false)}
+                >
+                  Start composing
+                </button>
+                <a
+                  className="inline-flex items-center gap-2 rounded-xl bg-amber-500/15 px-4 py-2 text-sm font-medium text-amber-100 ring-1 ring-amber-300/40 transition hover:bg-amber-400/25"
+                  href="https://surge-synthesizer.github.io/"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span>Download Surge XT (VST)</span>
+                  <span className="text-[11px] text-amber-200">surge-synthesizer.github.io</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex-1 min-h-0 min-w-0 flex">
         <Sidebar
           tracks={tracks}
