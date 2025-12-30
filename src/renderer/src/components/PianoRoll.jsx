@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react'
 import { Midi } from '@tonejs/midi'
 import InstrumentSelector from './InstrumentSelector'
 import VSTSelector from './VSTSelector'
+import { getSf2NoteRange, getSf2KeyLabels } from '@renderer/utils/spessaSf2'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
 import { playBackendNote, noteNameToMidi, backendPanic, openVSTEditor, loadSF2, setSF2Preset } from '@renderer/utils/vstBackend'
 
@@ -346,9 +347,26 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
           if (loadSessionRef.current === sessionId) {
             setSpessaInstrument({ backend: true }) // Flag that backend is handling this
             
-            // Set playable range (SF2 typically supports full MIDI range)
-            playableRangeRef.current = { min: 0, max: 127 }
-            setPlayableRangeState({ min: 0, max: 127 })
+            // Get playable note range using SF2 metadata reader
+            try {
+              const ctx = audioContextRef.current || getSharedAudioContext()
+              const r = await getSf2NoteRange(selectedInstrument.samplePath, ctx)
+              if (r && typeof r.min === 'number' && typeof r.max === 'number') {
+                if (loadSessionRef.current === sessionId) {
+                  playableRangeRef.current = r
+                  setPlayableRangeState(r)
+                }
+              } else {
+                // Fallback to full MIDI range
+                playableRangeRef.current = { min: 0, max: 127 }
+                setPlayableRangeState({ min: 0, max: 127 })
+              }
+            } catch (e) {
+              console.warn('Could not get SF2 note range:', e)
+              // Fallback to full MIDI range
+              playableRangeRef.current = { min: 0, max: 127 }
+              setPlayableRangeState({ min: 0, max: 127 })
+            }
             
             // Check if it's a drumkit for labels
             const p = String(selectedInstrument.samplePath || '')
@@ -356,10 +374,19 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
             const shouldLoadLabels = normalized.includes('drumkit')
             
             if (shouldLoadLabels) {
-              // For drum kits, set isDrumLike
-              setIsDrumLike(true)
-              // You could add label loading here if needed
-              setKeyLabels({})
+              // For drum kits, load labels and set isDrumLike
+              try {
+                const { labels, isDrumLike } = await getSf2KeyLabels(selectedInstrument.samplePath)
+                if (loadSessionRef.current === sessionId) {
+                  setKeyLabels(labels || {})
+                  setIsDrumLike(!!isDrumLike)
+                }
+              } catch {
+                if (loadSessionRef.current === sessionId) {
+                  setKeyLabels({})
+                  setIsDrumLike(true)
+                }
+              }
             } else {
               setKeyLabels({})
               setIsDrumLike(false)
