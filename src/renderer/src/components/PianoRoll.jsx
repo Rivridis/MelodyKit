@@ -563,13 +563,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
   }
 
-  // Update playhead position smoothly
+  // Update playhead position when not playing or during interactions
   useEffect(() => {
     // During drag/resize, overlay redraws are driven by the interaction rAF to avoid double clears
     if (dragging || resizing) return
-    drawPlayhead(currentBeat, playheadCanvasRef, CANVAS_HEIGHT)
-    drawPlayhead(currentBeat, timelinePlayheadCanvasRef, TIMELINE_HEIGHT)
-  }, [currentBeat, isPlaying, dragging, resizing])
+    // Only redraw when not playing (RAF loop handles playback animation)
+    if (isPlayingRef.current) return
+    drawPlayhead(currentBeatRef.current, playheadCanvasRef, CANVAS_HEIGHT)
+    drawPlayhead(currentBeatRef.current, timelinePlayheadCanvasRef, TIMELINE_HEIGHT)
+  }, [currentBeat, dragging, resizing])
 
   // Draw timeline
   useEffect(() => {

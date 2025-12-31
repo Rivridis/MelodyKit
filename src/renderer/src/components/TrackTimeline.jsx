@@ -74,10 +74,16 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const [bpmInput, setBpmInput] = useState(bpm.toString())
   const canvasRef = useRef(null)
   const timelineCanvasRef = useRef(null)
+  const timelinePlayheadCanvasRef = useRef(null)
+  const tracksPlayheadCanvasRef = useRef(null)
   const scrollContainerRef = useRef(null)
   const audioContextRef = useRef(null)
   const [audioReady, setAudioReady] = useState(false)
   const playbackIntervalRef = useRef(null)
+  const animationFrameRef = useRef(null)
+  const currentBeatRef = useRef(0)
+  const isPlayingRef = useRef(false)
+  const playbackStartTimeRef = useRef(null)
   const trackNotesRef = useRef(trackNotes)
   const trackInstrumentsRef = useRef(trackInstruments)
   const loadedInstrumentsRef = useRef({}) // Store loaded instruments by track ID
@@ -130,6 +136,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   // Calculate beat width based on zoom level
   const beatWidth = BEAT_WIDTH * zoom
+  const beatWidthRef = useRef(beatWidth)
+  useEffect(() => { beatWidthRef.current = beatWidth }, [beatWidth])
 
   useEffect(() => {
     // Use shared AudioContext across views
@@ -229,6 +237,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   useEffect(() => { trackNotesRef.current = trackNotes }, [trackNotes])
   useEffect(() => { trackInstrumentsRef.current = trackInstruments }, [trackInstruments])
+  useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
+  useEffect(() => { currentBeatRef.current = currentBeat }, [currentBeat])
 
   // Ensure per-track gain nodes exist and are connected
   useEffect(() => {
@@ -546,7 +556,83 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   const CANVAS_HEIGHT = tracks.length * TRACK_HEIGHT
 
-  // Draw timeline
+  // Draw playhead on separate canvas for smooth animation
+  const drawTimelinePlayhead = (beat) => {
+    // Draw on timeline canvas
+    const timelineCanvas = timelinePlayheadCanvasRef.current
+    if (timelineCanvas) {
+      const ctx = timelineCanvas.getContext('2d')
+      if (ctx) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, timelineCanvas.width, timelineCanvas.height)
+        const dpr = window.devicePixelRatio || 1
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        
+        if (isPlayingRef.current || beat > 0) {
+          ctx.fillStyle = '#ef4444'
+          ctx.fillRect(SIDEBAR_WIDTH + beat * beatWidthRef.current - 1.5, 0, 3, TIMELINE_HEIGHT)
+        }
+      }
+    }
+    
+    // Draw on tracks canvas
+    const tracksCanvas = tracksPlayheadCanvasRef.current
+    if (tracksCanvas) {
+      const ctx = tracksCanvas.getContext('2d')
+      if (ctx) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, tracksCanvas.width, tracksCanvas.height)
+        const dpr = window.devicePixelRatio || 1
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        const canvasHeight = tracks.length * TRACK_HEIGHT
+        
+        if (isPlayingRef.current || beat > 0) {
+          ctx.fillStyle = '#ef4444'
+          ctx.shadowColor = '#ef4444'
+          ctx.shadowBlur = 4
+          ctx.fillRect(SIDEBAR_WIDTH + beat * beatWidthRef.current - 1.5, 0, 3, canvasHeight)
+          ctx.shadowBlur = 0
+        }
+      }
+    }
+  }
+
+  // Smooth playhead animation using requestAnimationFrame
+  useEffect(() => {
+    if (!isPlaying) {
+      // Draw static playhead when not playing
+      drawTimelinePlayhead(currentBeatRef.current)
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      return
+    }
+    
+    const beatDuration = (60 / bpm) * 1000
+    
+    const animate = () => {
+      if (!isPlayingRef.current) return
+      
+      // Calculate beat position from start time and current time
+      const elapsed = Date.now() - playbackStartTimeRef.current
+      const beat = elapsed / beatDuration
+      drawTimelinePlayhead(beat)
+      
+      animationFrameRef.current = requestAnimationFrame(animate)
+    }
+    
+    animationFrameRef.current = requestAnimationFrame(animate)
+    
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+    }
+  }, [isPlaying, bpm])
+
+  // Draw timeline (static background, no playhead)
   useEffect(() => {
     const canvas = timelineCanvasRef.current
     if (!canvas) return
@@ -595,13 +681,41 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     ctx.strokeStyle = '#3f3f46'
     ctx.lineWidth = 1
     ctx.strokeRect(0, 0, CANVAS_WIDTH, TIMELINE_HEIGHT)
-    
-    // Playhead on timeline
-    if (isPlaying || currentBeat > 0) {
-      ctx.fillStyle = '#ef4444'
-      ctx.fillRect(SIDEBAR_WIDTH + currentBeat * beatWidth - 1.5, 0, 3, TIMELINE_HEIGHT)
-    }
-  }, [gridWidth, currentBeat, isPlaying, beatWidth])
+  }, [gridWidth, beatWidth])
+
+  // Setup playhead canvas
+  useEffect(() => {
+    const canvas = timelinePlayheadCanvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    const CANVAS_WIDTH = gridWidth * beatWidth + SIDEBAR_WIDTH
+    canvas.width = CANVAS_WIDTH * dpr
+    canvas.height = TIMELINE_HEIGHT * dpr
+    canvas.style.width = CANVAS_WIDTH + 'px'
+    canvas.style.height = TIMELINE_HEIGHT + 'px'
+    const ctx = canvas.getContext('2d', { alpha: true })
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, CANVAS_WIDTH, TIMELINE_HEIGHT)
+    // Initial draw
+    drawTimelinePlayhead(currentBeatRef.current)
+  }, [gridWidth, beatWidth])
+
+  // Setup tracks playhead canvas
+  useEffect(() => {
+    const canvas = tracksPlayheadCanvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    const CANVAS_WIDTH = gridWidth * beatWidth + SIDEBAR_WIDTH
+    canvas.width = CANVAS_WIDTH * dpr
+    canvas.height = CANVAS_HEIGHT * dpr
+    canvas.style.width = CANVAS_WIDTH + 'px'
+    canvas.style.height = CANVAS_HEIGHT + 'px'
+    const ctx = canvas.getContext('2d', { alpha: true })
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+    // Initial draw
+    drawTimelinePlayhead(currentBeatRef.current)
+  }, [gridWidth, beatWidth, tracks.length])
 
   // Draw track rows
   useEffect(() => {
@@ -799,16 +913,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       ctx.lineTo(CANVAS_WIDTH, y + TRACK_HEIGHT)
       ctx.stroke()
     })
-    
-    // Draw playhead
-    if (isPlaying || currentBeat > 0) {
-      ctx.fillStyle = '#ef4444'
-      ctx.shadowColor = '#ef4444'
-      ctx.shadowBlur = 4
-      ctx.fillRect(SIDEBAR_WIDTH + currentBeat * beatWidth - 1.5, 0, 3, CANVAS_HEIGHT)
-      ctx.shadowBlur = 0
-    }
-  }, [tracks, trackNotes, trackBeats, trackOffsets, gridWidth, currentBeat, isPlaying, hoveredTrack, beatWidth, resizing, dragging])
+  }, [tracks, trackNotes, trackBeats, trackOffsets, gridWidth, hoveredTrack, beatWidth, resizing, dragging])
 
   // Play a note with per-track instrument support
   const playNote = (trackId, noteName, duration = 0.3) => {
@@ -914,16 +1019,29 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (isRecording || isRestoring) return
     if (!tracks || tracks.length === 0) return
     if (isPlaying) {
+      isPlayingRef.current = false
       setIsPlaying(false)
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
       if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
       // Stop any audio clip playback
       try { Object.values(audioSourcesRef.current || {}).forEach((s) => { try { s.stop() } catch {} }); audioSourcesRef.current = {} } catch {}
     } else {
-      setIsPlaying(true)
-      beatLastStepRef.current = {}
       const beatDuration = 60000 / bpm
       const startBeat = (typeof startBeatOverride === 'number' ? startBeatOverride : currentBeat) || 0
       const startTime = Date.now() - startBeat * beatDuration
+      
+      // Set playback start time accounting for starting beat position
+      playbackStartTimeRef.current = startTime
+      currentBeatRef.current = startBeat
+      
+      // Update refs BEFORE setting state so RAF sees correct values immediately
+      isPlayingRef.current = true
+      setIsPlaying(true)
+      
+      beatLastStepRef.current = {}
       // Compute when to stop (last note/clip/beat end across all tracks)
       let maxEndBeat = 0
       const tnPlay = trackNotesRef.current || {}
@@ -1028,6 +1146,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const elapsed = Date.now() - startTime
         const beat = elapsed / beatDuration
         setCurrentBeat(beat)
+        currentBeatRef.current = beat
         // High-resolution beat scheduling: run every tick so high step counts (24/32) don't skip
         try {
           tracks.forEach((t) => {
@@ -1083,9 +1202,15 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           })
         }
         if (beat >= maxEndBeat - 0.001) {
+          isPlayingRef.current = false
           setIsPlaying(false)
           setCurrentBeat(0)
+          currentBeatRef.current = 0
           clearInterval(playbackIntervalRef.current)
+          if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current)
+            animationFrameRef.current = null
+          }
           // Stop audio sources
           try { Object.values(audioSourcesRef.current || {}).forEach((s) => { try { s.stop() } catch {} }); audioSourcesRef.current = {} } catch {}
         }
@@ -1387,9 +1512,20 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (x >= SIDEBAR_WIDTH) {
       const beat = (x - SIDEBAR_WIDTH) / beatWidth
       setCurrentBeat(beat)
+      currentBeatRef.current = beat
+      
+      // Immediately redraw playhead at new position
+      drawTimelinePlayhead(beat)
+      
       if (isPlaying) {
         // Reset playback
         if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current)
+          animationFrameRef.current = null
+        }
+        // Restart with new position
+        playbackStartTimeRef.current = Date.now() - (beat * (60000 / bpm))
         const beatDuration = 60000 / bpm
         const startTime = Date.now() - beat * beatDuration
         // Restart audio clip playback from new position
@@ -1541,12 +1677,31 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             })
           }
           if (currentBeat >= maxEndBeat - 0.001) {
+            isPlayingRef.current = false
             setIsPlaying(false)
             setCurrentBeat(0)
+            currentBeatRef.current = 0
             clearInterval(playbackIntervalRef.current)
+            if (animationFrameRef.current) {
+              cancelAnimationFrame(animationFrameRef.current)
+              animationFrameRef.current = null
+            }
             try { Object.values(audioSourcesRef.current || {}).forEach((s) => { try { s.stop() } catch {} }); audioSourcesRef.current = {} } catch {}
           }
         }, 16)
+        
+        // Restart RAF animation from new position
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current)
+        }
+        const animate = () => {
+          if (!isPlayingRef.current) return
+          const elapsed = Date.now() - playbackStartTimeRef.current
+          const animBeat = elapsed / beatDuration
+          drawTimelinePlayhead(animBeat)
+          animationFrameRef.current = requestAnimationFrame(animate)
+        }
+        animationFrameRef.current = requestAnimationFrame(animate)
       }
     }
   }
@@ -1569,12 +1724,23 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (isPlaying) {
       // Stop current playback and restart from 0
       if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      isPlayingRef.current = false
       setIsPlaying(false)
       setCurrentBeat(0)
+      currentBeatRef.current = 0
+      // Redraw playhead at position 0
+      drawTimelinePlayhead(0)
       // Next tick start from beginning
       setTimeout(() => togglePlayback(0), 0)
     } else {
       setCurrentBeat(0)
+      currentBeatRef.current = 0
+      // Redraw playhead at position 0
+      drawTimelinePlayhead(0)
     }
   }
 
@@ -1896,8 +2062,21 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 }}
                 onClick={handleTimelineClick}
               />
+              <canvas
+                ref={timelinePlayheadCanvasRef}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  display: 'block',
+                  width: gridWidth * beatWidth + SIDEBAR_WIDTH,
+                  height: TIMELINE_HEIGHT,
+                  background: 'transparent',
+                  pointerEvents: 'none'
+                }}
+              />
             </div>
-            <div style={{ width: gridWidth * beatWidth + SIDEBAR_WIDTH, minHeight: CANVAS_HEIGHT }}>
+            <div style={{ width: gridWidth * beatWidth + SIDEBAR_WIDTH, minHeight: CANVAS_HEIGHT, position: 'relative' }}>
               <canvas
                 ref={canvasRef}
                 style={{
@@ -1912,9 +2091,22 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 onMouseMove={handleCanvasMouseMove}
                 onMouseLeave={handleCanvasMouseLeave}
               />
+              <canvas
+                ref={tracksPlayheadCanvasRef}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  display: 'block',
+                  width: gridWidth * beatWidth + SIDEBAR_WIDTH,
+                  height: CANVAS_HEIGHT,
+                  background: 'transparent',
+                  pointerEvents: 'none'
+                }}
+              />
               {/* Overlay per-track volume sliders within sidebar area */}
               <div
-                style={{ position: 'absolute', left: 0, top: TIMELINE_HEIGHT, width: SIDEBAR_WIDTH, pointerEvents: 'none' }}
+                style={{ position: 'absolute', left: 0, top: 0, width: SIDEBAR_WIDTH, pointerEvents: 'none' }}
               >
                 {tracks.map((track, index) => {
                   const y = index * TRACK_HEIGHT
