@@ -17,6 +17,8 @@ const RESIZE_HANDLE_LINE = 1 // px, slimmer visual line to avoid crossing note e
 const RESIZE_HANDLE_COLOR = 'rgba(255, 245, 157, 0.95)' // soft white/yellow tint
 const TIMELINE_HEIGHT = 24 // px
 const CANVAS_HEIGHT = NOTES.length * OCTAVES.length * NOTE_HEIGHT
+const OFFSCREEN_READY_TIMEOUT_MS = 250 // fast fallback to avoid blank canvas while worker warms up
+const ENABLE_OFFSCREEN_CANVAS = false // disable OffscreenCanvas to avoid GPU driver instability
 
 // Utility: convert #RRGGBB to rgba(r,g,b,a)
 function hexToRgba(hex, alpha = 1) {
@@ -642,10 +644,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   // Helper: draw main canvas for currently visible horizontal region only
   // If OffscreenCanvas is available, this posts a draw request to the worker; otherwise draws on main thread.
   const drawMainCanvas = () => {
-    // If we plan to use Offscreen but it's not ready yet, avoid creating a 2D context
-    if (offscreenDesiredRef.current && !offscreenReadyRef.current && !useOffscreenRef.current) {
-      return
-    }
+    // Prefer worker when ready; otherwise, paint on main thread immediately so the user sees content while the worker warms up.
     if (useOffscreenRef.current && workerRef.current && scrollContainerRef.current) {
       const sc = scrollContainerRef.current
       workerRef.current.postMessage({
@@ -751,6 +750,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     if (!htmlCanvas) return
     const dpr = window.devicePixelRatio || 1
     const CANVAS_WIDTH = gridWidth * BEAT_WIDTH + 80
+    let readyTimeout = null
     // Always size CSS for layout
     htmlCanvas.style.width = CANVAS_WIDTH + 'px'
     htmlCanvas.style.height = CANVAS_HEIGHT + 'px'
@@ -765,12 +765,19 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
 
     // Try OffscreenCanvas path once using a safe handshake to avoid blank canvas if worker fails
-    if (!workerRef.current) {
+    if (ENABLE_OFFSCREEN_CANVAS && !workerRef.current) {
       offscreenDesiredRef.current = true
       let fallbackDone = false
+      const clearReadyTimeout = () => {
+        if (readyTimeout) {
+          clearTimeout(readyTimeout)
+          readyTimeout = null
+        }
+      }
       const doFallback = (reason) => {
         if (fallbackDone) return
         fallbackDone = true
+        clearReadyTimeout()
         useOffscreenRef.current = false
         offscreenDesiredRef.current = false
         offscreenReadyRef.current = false
@@ -794,6 +801,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         const readyHandler = (e) => {
           if (!e || !e.data || e.data.type !== 'ready') return
           worker.removeEventListener('message', readyHandler)
+          clearReadyTimeout()
           // Now attempt Offscreen transfer if supported
           if (typeof htmlCanvas.transferControlToOffscreen !== 'function') {
             doFallback('transferControlToOffscreen not supported')
@@ -828,9 +836,9 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         worker.addEventListener('message', readyHandler)
         worker.addEventListener('error', () => doFallback('worker error'))
         // Safety timeout: if ready not received soon, fallback
-        setTimeout(() => {
+        readyTimeout = setTimeout(() => {
           if (!useOffscreenRef.current) doFallback('worker ready timeout')
-        }, 1500)
+        }, OFFSCREEN_READY_TIMEOUT_MS)
       } catch (e) {
         doFallback(e?.message || 'worker creation failed')
       }
@@ -847,7 +855,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
 
     // Push latest state to worker or set up 2D canvas as fallback
-    if (useOffscreenRef.current && workerRef.current) {
+    if (ENABLE_OFFSCREEN_CANVAS && useOffscreenRef.current && workerRef.current) {
       workerRef.current.postMessage({
         type: 'setState',
         gridWidth,
@@ -867,7 +875,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
 
     return () => {
-      // no-op here; worker terminated on unmount
+      if (readyTimeout) clearTimeout(readyTimeout)
     }
   }, [gridWidth])
 
