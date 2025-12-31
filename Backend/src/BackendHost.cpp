@@ -377,8 +377,12 @@ bool BackendHost::loadPlugin(const juce::String& trackId, const juce::File& file
     // Unload existing plugin for this track if any
     auto it = tracks.find(trackId);
     if (it != tracks.end()) {
+        // IMPORTANT: Remove audio callbacks BEFORE freeing resources they depend on
+        if (it->second.gainCallback) {
+            deviceManager.removeAudioCallback(it->second.gainCallback.get());
+            it->second.gainCallback.reset(); // Clear the callback
+        }
         if (it->second.player) {
-            deviceManager.removeAudioCallback(it->second.player.get());
             it->second.player->setProcessor(nullptr);
         }
         it->second.editorWindow.reset();
@@ -415,6 +419,7 @@ void BackendHost::unloadPlugin(const juce::String& trackId) {
         it->second.editorWindow.reset();
     }
     
+    // IMPORTANT: Remove audio callbacks BEFORE freeing resources they depend on
     if (it->second.sf2Callback) {
         deviceManager.removeAudioCallback(it->second.sf2Callback.get());
     }
@@ -427,6 +432,7 @@ void BackendHost::unloadPlugin(const juce::String& trackId) {
         it->second.player->setProcessor(nullptr);
     }
     
+    // Now safe to close the SoundFont after callback is removed
     if (it->second.soundFont) {
         tsf_close(it->second.soundFont);
     }
@@ -620,17 +626,22 @@ bool BackendHost::loadSF2(const juce::String& trackId, const juce::File& file, j
     // Unload existing plugin/SF2 for this track if any
     auto it = tracks.find(trackId);
     if (it != tracks.end()) {
+        // IMPORTANT: Remove audio callbacks BEFORE freeing resources they depend on
         if (it->second.sf2Callback) {
             deviceManager.removeAudioCallback(it->second.sf2Callback.get());
+            it->second.sf2Callback.reset(); // Clear the callback
         }
         if (it->second.gainCallback) {
             deviceManager.removeAudioCallback(it->second.gainCallback.get());
+            it->second.gainCallback.reset(); // Clear the callback
         }
         if (it->second.player) {
             it->second.player->setProcessor(nullptr);
         }
+        // Now safe to close the SoundFont after callback is removed
         if (it->second.soundFont) {
             tsf_close(it->second.soundFont);
+            it->second.soundFont = nullptr;
         }
         it->second.editorWindow.reset();
         it->second.plugin.reset();

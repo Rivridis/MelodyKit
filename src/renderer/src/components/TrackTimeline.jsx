@@ -1732,14 +1732,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       setIsPlaying(false)
       setCurrentBeat(0)
       currentBeatRef.current = 0
-      // Redraw playhead at position 0
-      drawTimelinePlayhead(0)
       // Next tick start from beginning
       setTimeout(() => togglePlayback(0), 0)
     } else {
       setCurrentBeat(0)
       currentBeatRef.current = 0
-      // Redraw playhead at position 0
       drawTimelinePlayhead(0)
     }
   }
