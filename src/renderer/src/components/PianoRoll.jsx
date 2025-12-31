@@ -1798,6 +1798,16 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
   }
 
+  const instrumentActive = !!spessaInstrument
+  const vstButtonDisabled = mode !== 'edit' || instrumentLoading || (instrumentActive && !useVSTBackend)
+  const vstButtonTitle = mode !== 'edit'
+    ? 'Switch to Edit mode to load VST'
+    : instrumentLoading
+      ? 'Wait for the instrument to finish loading before using a VST'
+      : instrumentActive && !useVSTBackend
+        ? 'Unload the instrument before loading a VST'
+        : 'Load VST Plugin'
+
   return (
     <div className="fixed inset-0 flex flex-col bg-zinc-900">
       <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-b from-zinc-800 to-zinc-900 border-b border-zinc-700 shadow-lg">
@@ -1887,10 +1897,10 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
             <span className="text-xs text-zinc-400">▼</span>
           </button>
           <button
-            onClick={() => { if (mode === 'edit') setShowVSTSelector(true) }}
-            disabled={mode !== 'edit'}
-            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (useVSTBackend ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500')}`}
-            title={mode !== 'edit' ? 'Switch to Edit mode to load VST' : 'Load VST Plugin'}
+            onClick={() => { if (!vstButtonDisabled) setShowVSTSelector(true) }}
+            disabled={vstButtonDisabled}
+            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${vstButtonDisabled ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (useVSTBackend ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500')}`}
+            title={vstButtonTitle}
           >
             <span className="text-base">🎛️</span>
             <span className="text-sm font-medium">{useVSTBackend ? 'VST Loaded' : 'Load VST'}</span>

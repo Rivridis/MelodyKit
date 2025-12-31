@@ -7,12 +7,39 @@ import path from 'path'
 import { pathToFileURL } from 'url'
 
 // Unified helper for resolving files in the resources directory
-// Uses unpacked path in production and plain folder in development
-const getResource = (file) => {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', file)
-    : path.join(__dirname, '../../resources', file)
-}
+// Handles asar/unpacked and asar=false layouts
+const resolveResourcesRoot = (() => {
+  let cached = null
+  return () => {
+    if (cached) return cached
+
+    const candidates = []
+    if (app.isPackaged) {
+      // Typical asar-unpacked location when asar is enabled
+      candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'resources'))
+      // Location when asar is disabled (resources copied under resources/app)
+      candidates.push(path.join(process.resourcesPath, 'app', 'resources'))
+      // Fallback to a sibling resources folder if present
+      candidates.push(path.join(process.resourcesPath, 'resources'))
+    }
+    // Development path (relative to compiled main output)
+    candidates.push(path.join(__dirname, '../../resources'))
+
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          cached = candidate
+          break
+        }
+      } catch (error) {}
+    }
+
+    cached = cached || candidates[candidates.length - 1]
+    return cached
+  }
+})()
+
+const getResource = (file) => path.join(resolveResourcesRoot(), file)
 
 // Helper function to determine instrument icon
 function getInstrumentIcon(folderName) {
@@ -660,9 +687,7 @@ app.whenReady().then(() => {
   // IPC: list available drum sounds under resources/Sequencer
   ipcMain.handle('sequencer:listSounds', async () => {
     try {
-      const seqDir = app.isPackaged
-        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'Sequencer')
-        : path.join(__dirname, '../../resources/Sequencer')
+      const seqDir = path.join(resolveResourcesRoot(), 'Sequencer')
 
       if (!fs.existsSync(seqDir)) return []
 
@@ -691,10 +716,7 @@ app.whenReady().then(() => {
   // IPC handler to get available instruments from resources folder
   ipcMain.handle('get-instruments', async () => {
     try {
-      // Root of unpacked resources in prod or plain folder in dev
-      const resourcesPath = app.isPackaged
-        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources')
-        : path.join(__dirname, '../../resources')
+      const resourcesPath = resolveResourcesRoot()
 
       const items = fs.readdirSync(resourcesPath, { withFileTypes: true })
       const instruments = []
