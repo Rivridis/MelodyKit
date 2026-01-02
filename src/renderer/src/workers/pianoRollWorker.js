@@ -64,28 +64,19 @@ function drawVisibleSlice(scrollLeft, clientWidth) {
   const vw = Math.max(0, vx2 - vx1)
   if (vw <= 0) return
 
-  // Clear only visible slice
-  clearRegion(vx1, 0, vw, canvasHeightCSS)
+  // Clear entire canvas
+  clearRegion(0, 0, gridWidth * BEAT_WIDTH + 80, canvasHeightCSS)
 
-  // Determine visible beats (+margin)
-  const startBeat = Math.max(0, (vx1 - 80) / BEAT_WIDTH) - 1
-  const endBeat = Math.min(gridWidth, (vx2 - 80) / BEAT_WIDTH) + 1
-  const startI = Math.max(0, Math.floor(startBeat))
-  const endI = Math.min(gridWidth, Math.ceil(endBeat))
-
-  // Row backgrounds
-  const bgX = Math.max(80, vx1)
-  const bgW = Math.max(0, vx2 - bgX)
+  // Row backgrounds - draw full width
   for (let i = 0; i < pianoNotes.length; i++) {
     const isBlack = pianoNotes[i].includes('#')
     ctx.fillStyle = isBlack ? '#23272e' : '#2d2f36'
-    if (bgW > 0) ctx.fillRect(bgX, i * NOTE_HEIGHT, bgW, NOTE_HEIGHT)
+    ctx.fillRect(80, i * NOTE_HEIGHT, gridWidth * BEAT_WIDTH, NOTE_HEIGHT)
   }
 
-  // Vertical grid lines (beats)
-  for (let i = startI; i <= endI; i++) {
+  // Vertical grid lines (beats) - draw all
+  for (let i = 0; i <= gridWidth; i++) {
     const x = 80 + i * BEAT_WIDTH
-    if (x < vx1 - 1 || x > vx2 + 1) continue
     ctx.strokeStyle = '#5a606f'
     ctx.lineWidth = i % 4 === 0 ? 2 : 1
     ctx.beginPath()
@@ -96,11 +87,10 @@ function drawVisibleSlice(scrollLeft, clientWidth) {
 
   // Subdivision lines
   const subdivisionsPerBeat = gridDivision / 4
-  for (let i = startI; i < endI; i++) {
+  for (let i = 0; i < gridWidth; i++) {
     const baseX = 80 + i * BEAT_WIDTH
     for (let j = 1; j < subdivisionsPerBeat; j++) {
       const x = baseX + (j * BEAT_WIDTH / subdivisionsPerBeat)
-      if (x < vx1 - 1 || x > vx2 + 1) continue
       ctx.strokeStyle = '#5a606f'
       ctx.lineWidth = 1
       ctx.beginPath()
@@ -110,7 +100,7 @@ function drawVisibleSlice(scrollLeft, clientWidth) {
     }
   }
 
-  // Notes
+  // Draw all notes (culling removed to fix scrolling visibility)
   const hiddenSet = new Set(hiddenNoteIds)
   const selSet = new Set(selectedNoteIds)
   for (let i = 0; i < notes.length; i++) {
@@ -120,7 +110,6 @@ function drawVisibleSlice(scrollLeft, clientWidth) {
     if (idx === -1 || idx === undefined) continue
     const noteStartX = 80 + n.start * BEAT_WIDTH
     const noteEndX = noteStartX + n.duration * BEAT_WIDTH
-    if (noteEndX < vx1 || noteStartX > vx2) continue
     const y = idx * NOTE_HEIGHT
     const isSelected = selSet.has(n.id)
     const colorWithOpacity = isSelected ? trackColor + 'FF' : trackColor + 'E8'

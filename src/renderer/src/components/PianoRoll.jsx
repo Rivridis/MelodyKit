@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import { Midi } from '@tonejs/midi'
 import InstrumentSelector from './InstrumentSelector'
 import VSTSelector from './VSTSelector'
@@ -645,7 +645,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Helper: draw main canvas for currently visible horizontal region only
   // If OffscreenCanvas is available, this posts a draw request to the worker; otherwise draws on main thread.
-  const drawMainCanvas = () => {
+  const drawMainCanvas = useCallback(() => {
     // Prefer worker when ready; otherwise, paint on main thread immediately so the user sees content while the worker warms up.
     if (useOffscreenRef.current && workerRef.current && scrollContainerRef.current) {
       const sc = scrollContainerRef.current
@@ -670,8 +670,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     const vw = Math.max(0, vx2 - vx1)
     if (vw <= 0) return
 
-    // Clear only visible region
-    ctx.clearRect(vx1, 0, vw, CANVAS_HEIGHT)
+    // Clear entire canvas
+    ctx.clearRect(0, 0, gridWidth * BEAT_WIDTH + 80, CANVAS_HEIGHT)
 
     // Determine visible beats range (+ small margin)
     const startBeat = Math.max(0, (vx1 - 80) / BEAT_WIDTH) - 1
@@ -679,19 +679,16 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     const startI = Math.max(0, Math.floor(startBeat))
     const endI = Math.min(gridWidth, Math.ceil(endBeat))
 
-    // Row backgrounds
-    const bgX = Math.max(80, vx1)
-    const bgW = Math.max(0, vx2 - bgX)
+    // Row backgrounds - draw full width from keys area
     for (let i = 0; i < pianoNotes.length; i++) {
       const isBlack = pianoNotes[i].includes('#')
       ctx.fillStyle = isBlack ? '#23272e' : '#2d2f36'
-      if (bgW > 0) ctx.fillRect(bgX, i * NOTE_HEIGHT, bgW, NOTE_HEIGHT)
+      ctx.fillRect(80, i * NOTE_HEIGHT, gridWidth * BEAT_WIDTH, NOTE_HEIGHT)
     }
 
-    // Vertical grid lines (beats)
-    for (let i = startI; i <= endI; i++) {
+    // Vertical grid lines (beats) - draw all
+    for (let i = 0; i <= gridWidth; i++) {
       const x = 80 + i * BEAT_WIDTH
-      if (x < vx1 - 1 || x > vx2 + 1) continue
       ctx.strokeStyle = i % 4 === 0 ? '#5a606f' : '#5a606f'
       ctx.lineWidth = i % 4 === 0 ? 2 : 1
       ctx.beginPath()
@@ -702,11 +699,10 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
     // Subdivision lines
     const subdivisionsPerBeat = gridDivision / 4
-    for (let i = startI; i < endI; i++) {
+    for (let i = 0; i < gridWidth; i++) {
       const baseX = 80 + i * BEAT_WIDTH
       for (let j = 1; j < subdivisionsPerBeat; j++) {
         const x = baseX + (j * BEAT_WIDTH / subdivisionsPerBeat)
-        if (x < vx1 - 1 || x > vx2 + 1) continue
         const isCenterLine = subdivisionsPerBeat === 2 && j === 1
         ctx.strokeStyle = isCenterLine ? '#5a606f' : '#5a606f'
         ctx.lineWidth = 1
@@ -717,7 +713,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       }
     }
 
-    // Notes within visible horizontal range
+    // Draw all notes (culling removed to fix scrolling visibility)
     const hiddenSet = new Set(hiddenNoteIds)
     const selSet = new Set(selectedNoteIds)
     for (let i = 0; i < notes.length; i++) {
@@ -727,7 +723,6 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       if (idx === -1 || idx === undefined) continue
       const noteStartX = 80 + n.start * BEAT_WIDTH
       const noteEndX = noteStartX + n.duration * BEAT_WIDTH
-      if (noteEndX < vx1 || noteStartX > vx2) continue // horizontal cull
       const y = idx * NOTE_HEIGHT
       const isSelected = selSet.has(n.id)
       const colorWithOpacity = isSelected ? trackColor + 'FF' : trackColor + 'E8'
@@ -744,7 +739,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       ctx.fillStyle = RESIZE_HANDLE_COLOR
       ctx.fillRect(lineX, lineY, RESIZE_HANDLE_LINE, NOTE_HEIGHT - 12)
     }
-  }
+  }, [notes, gridWidth, gridDivision, hiddenNoteIds, selectedNoteIds, trackColor])
 
   // Initialize Offscreen worker (if supported) and set canvas size; always draw only visible region
   useEffect(() => {
@@ -933,7 +928,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       window.removeEventListener('resize', onScroll)
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [gridWidth])
+  }, [gridWidth, drawMainCanvas])
 
   // Draw sticky piano keys on separate overlay canvas, dimming keys outside playable range
   useEffect(() => {
