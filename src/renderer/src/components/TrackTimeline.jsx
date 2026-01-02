@@ -63,7 +63,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -1054,6 +1054,12 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (!audioContextRef.current) return
     const ctx = audioContextRef.current
     const destination = masterGainRef.current || ctx.destination
+    
+    // Skip playback if VST is currently loading
+    if (trackVSTLoading && trackVSTLoading[trackId]) {
+      console.log(`Track ${trackId} VST still loading, skipping note playback`)
+      return
+    }
     
     const loadedInstrument = loadedInstrumentsRef.current[trackId]
     

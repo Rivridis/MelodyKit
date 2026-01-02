@@ -48,6 +48,8 @@ function App() {
   const [trackLengths, setTrackLengths] = useState({}) // { trackId: lengthBeats } - manual length for MIDI/audio tracks
   const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
+  const [trackVSTPresets, setTrackVSTPresets] = useState({}) // { trackId: base64State } - VST plugin preset state
+  const [trackVSTLoading, setTrackVSTLoading] = useState({}) // { trackId: boolean } - track VST is currently loading
   const [trackMuted, setTrackMuted] = useState({}) // { trackId: boolean } - track mute status
   const [trackSoloed, setTrackSoloed] = useState({}) // { trackId: boolean } - track solo status
   const [trackAutomation, setTrackAutomation] = useState({}) // { trackId: { enabled: boolean, type: 'volume'|'pan'|'resonance'|'cutoff', data: { volume: [{beat, value}], pan: [...], resonance: [...], cutoff: [...] } } }
@@ -205,6 +207,15 @@ function App() {
   const newTrackSoloed = { ...trackSoloed }
   delete newTrackSoloed[trackId]
   setTrackSoloed(newTrackSoloed)
+  const newTrackVSTPlugins = { ...trackVSTPlugins }
+  delete newTrackVSTPlugins[trackId]
+  setTrackVSTPlugins(newTrackVSTPlugins)
+  const newTrackVSTPresets = { ...trackVSTPresets }
+  delete newTrackVSTPresets[trackId]
+  setTrackVSTPresets(newTrackVSTPresets)
+  const newTrackVSTLoading = { ...trackVSTLoading }
+  delete newTrackVSTLoading[trackId]
+  setTrackVSTLoading(newTrackVSTLoading)
     // Clear backend beat resources if this was a beat track
     window.api?.backend?.clearBeat?.(String(trackId)).catch(() => {})
     
@@ -221,11 +232,35 @@ function App() {
   }
 
   // Duplicate track
-  const handleDuplicateTrack = (trackId) => {
+  const handleDuplicateTrack = async (trackId) => {
     const trackToDuplicate = tracks.find(t => t.id === trackId)
     if (!trackToDuplicate) return
     
     const newId = Date.now()
+    
+    // If this is a VST track, capture the current preset state BEFORE duplicating
+    let capturedPreset = trackVSTPresets[trackId]
+    if (trackVSTMode[trackId] && trackVSTPlugins[trackId] && !capturedPreset) {
+      console.log(`[Duplicate] Capturing VST preset from track ${trackId} before duplication...`)
+      try {
+        const statePromise = waitForBackendEvent(
+          (line) => line.startsWith(`EVENT STATE ${trackId} `) || line.startsWith(`ERROR GET_STATE ${trackId}`),
+          5000
+        )
+        await window.api?.backend?.getVSTState?.(String(trackId))
+        const stateEvent = await statePromise
+        
+        if (stateEvent.startsWith(`EVENT STATE ${trackId} `)) {
+          capturedPreset = stateEvent.substring(`EVENT STATE ${trackId} `.length)
+          console.log(`[Duplicate] ✓ Captured preset for track ${trackId}, length: ${capturedPreset.length}`)
+          // Update the state with the captured preset
+          setTrackVSTPresets(prev => ({ ...prev, [trackId]: capturedPreset }))
+        }
+      } catch (err) {
+        console.warn(`[Duplicate] Could not capture VST preset:`, err.message)
+      }
+    }
+    
     const newTrack = {
       ...trackToDuplicate,
       id: newId,
@@ -239,28 +274,155 @@ function App() {
     newTracks.splice(trackIndex + 1, 0, newTrack)
     setTracks(newTracks)
     
-    // Copy track data
+    // Copy all track state (deep copy where needed)
     if (trackNotes[trackId]) {
       setTrackNotes(prev => ({ ...prev, [newId]: [...trackNotes[trackId]] }))
     }
-    if (trackInstruments[trackId]) {
-      setTrackInstruments(prev => ({ ...prev, [newId]: trackInstruments[trackId] }))
-    }
+    
     if (trackBeats[trackId]) {
-      setTrackBeats(prev => ({ ...prev, [newId]: { ...trackBeats[trackId], rows: trackBeats[trackId].rows?.map(r => ({ ...r })) || [] } }))
+      setTrackBeats(prev => ({ 
+        ...prev, 
+        [newId]: { 
+          ...trackBeats[trackId], 
+          rows: trackBeats[trackId].rows?.map(r => ({ ...r })) || [] 
+        } 
+      }))
     }
+    
+    // Copy other track properties
     setTrackVolumes(prev => ({ ...prev, [newId]: trackVolumes[trackId] ?? 100 }))
     setTrackOffsets(prev => ({ ...prev, [newId]: trackOffsets[trackId] ?? 0 }))
     setTrackLengths(prev => ({ ...prev, [newId]: trackLengths[trackId] }))
-    setTrackVSTMode(prev => ({ ...prev, [newId]: trackVSTMode[trackId] ?? false }))
     setTrackMuted(prev => ({ ...prev, [newId]: trackMuted[trackId] ?? false }))
     setTrackSoloed(prev => ({ ...prev, [newId]: trackSoloed[trackId] ?? false }))
     
-    // Copy VST plugin if present
+    // Copy instrument/VST settings - these will trigger loading via existing effects
+    if (trackInstruments[trackId]) {
+      const instrumentCopy = JSON.parse(JSON.stringify(trackInstruments[trackId]))
+      setTrackInstruments(prev => ({ ...prev, [newId]: instrumentCopy }))
+    }
+    
+    if (trackVSTMode[trackId]) {
+      setTrackVSTMode(prev => ({ ...prev, [newId]: true }))
+    }
+    
     if (trackVSTPlugins[trackId]) {
       setTrackVSTPlugins(prev => ({ ...prev, [newId]: trackVSTPlugins[trackId] }))
     }
+    
+    // Copy the captured or existing preset
+    if (capturedPreset) {
+      setTrackVSTPresets(prev => ({ ...prev, [newId]: capturedPreset }))
+      console.log(`[Duplicate] ✓ VST preset copied to new track ${newId}`)
+    }
+    
+    console.log(`[Duplicate] Track ${trackId} duplicated as ${newId}`)
   }
+
+  // Auto-load VST plugins when trackVSTPlugins or trackVSTMode changes
+  useEffect(() => {
+    if (isRestoring) return // Don't interfere with project loading
+    
+    const loadVSTsForNewTracks = async () => {
+      for (const [trackId, vstPath] of Object.entries(trackVSTPlugins)) {
+        // Skip if already loading
+        if (trackVSTLoading[trackId]) {
+          console.log(`[Auto-Load] Track ${trackId} already loading, skipping...`)
+          continue
+        }
+        
+        // Check if this track needs VST loaded
+        if (trackVSTMode[trackId] && vstPath) {
+          // Check if already loaded by trying to get state
+          try {
+            const checkPromise = waitForBackendEvent(
+              (line) => line.startsWith(`EVENT STATE ${trackId} `) || line.startsWith(`ERROR GET_STATE ${trackId}`),
+              1500
+            )
+            await window.api?.backend?.getVSTState?.(String(trackId))
+            const checkResult = await checkPromise
+            
+            // If we get an error, the VST isn't loaded yet
+            if (checkResult.startsWith(`ERROR GET_STATE ${trackId}`)) {
+              console.log(`[Auto-Load] VST not loaded for track ${trackId}, loading now...`)
+              
+              // Mark as loading
+              setTrackVSTLoading(prev => ({ ...prev, [trackId]: true }))
+              
+              try {
+                // Wait for both LOADED and READY events
+                const loadEventPromise = waitForBackendEvent(
+                  (line) => line.startsWith(`EVENT LOADED ${trackId} `) || line.startsWith(`ERROR LOAD ${trackId}`),
+                  15000
+                )
+                
+                const readyEventPromise = waitForBackendEvent(
+                  (line) => line.startsWith(`EVENT READY ${trackId} `),
+                  20000
+                )
+                
+                const loadResult = await window.api?.backend?.loadVST?.(trackId, vstPath)
+                
+                if (loadResult && loadResult.ok) {
+                  const loadEvent = await loadEventPromise
+                  if (loadEvent.startsWith(`EVENT LOADED ${trackId}`)) {
+                    console.log(`[Auto-Load] VST LOADED event received for track ${trackId}`)
+                    
+                    // Wait for READY event (plugin fully initialized)
+                    const readyEvent = await readyEventPromise
+                    if (readyEvent.startsWith(`EVENT READY ${trackId}`)) {
+                      console.log(`[Auto-Load] ✓ VST READY for track ${trackId}`)
+                      
+                      // Small delay to ensure all React state updates have propagated
+                      await new Promise(resolve => setTimeout(resolve, 100))
+                      
+                      // Check for preset again in case it was just set
+                      const presetData = trackVSTPresets[trackId]
+                      if (presetData) {
+                        console.log(`[Auto-Load] Found preset for track ${trackId}, applying... (length: ${presetData.length})`)
+                        try {
+                          const stateEventPromise = waitForBackendEvent(
+                            (line) => line.startsWith(`EVENT STATE_SET ${trackId}`) || line.startsWith(`ERROR SET_STATE ${trackId}`),
+                            15000
+                          )
+                          
+                          await window.api?.backend?.setVSTState?.(trackId, presetData)
+                          const stateEvent = await stateEventPromise
+                          
+                          if (stateEvent.startsWith(`EVENT STATE_SET ${trackId}`)) {
+                            console.log(`[Auto-Load] ✓ VST preset applied for track ${trackId}`)
+                          } else {
+                            console.error(`[Auto-Load] ✗ Failed to apply preset for track ${trackId}:`, stateEvent)
+                          }
+                        } catch (err) {
+                          console.error(`[Auto-Load] Failed to apply preset for track ${trackId}:`, err)
+                        }
+                      } else {
+                        console.warn(`[Auto-Load] No preset found for track ${trackId}, VST will use default state`)
+                      }
+                    }
+                  }
+                }
+              } catch (err) {
+                console.error(`[Auto-Load] Failed to load VST for track ${trackId}:`, err)
+              } finally {
+                // Clear loading state
+                setTrackVSTLoading(prev => ({ ...prev, [trackId]: false }))
+              }
+            } else {
+              // VST is already loaded
+              console.log(`[Auto-Load] VST already loaded for track ${trackId}`)
+            }
+          } catch (err) {
+            // Timeout or error checking - might need to load
+            console.log(`[Auto-Load] Could not verify VST state for track ${trackId} (${err.message})`)
+          }
+        }
+      }
+    }
+    
+    loadVSTsForNewTracks()
+  }, [trackVSTPlugins, trackVSTMode, trackVSTPresets, trackVSTLoading, isRestoring])
 
   // Update notes for a track
   const handleNotesChange = (trackId, notes) => {
@@ -331,7 +493,7 @@ function App() {
   // Build a serializable project object
   const buildProject = async () => {
     // Capture VST preset states for tracks with loaded VSTs
-    const trackVSTPresets = {}
+    const capturedVSTPresets = {}
     console.log('Building project - trackVSTPlugins:', trackVSTPlugins)
     console.log('Building project - trackVSTMode:', trackVSTMode)
     
@@ -358,7 +520,7 @@ function App() {
             
             if (response.startsWith(`EVENT STATE ${trackId} `)) {
               const stateData = response.substring(`EVENT STATE ${trackId} `.length)
-              trackVSTPresets[trackId] = stateData
+              capturedVSTPresets[trackId] = stateData
               console.log(`✓ Captured VST state for track ${trackId}, length: ${stateData.length}`)
             } else {
               console.warn(`✗ Failed to get VST state for track ${trackId}: ${response}`)
@@ -372,8 +534,11 @@ function App() {
       }
     }
     
-    console.log('Final trackVSTPresets keys:', Object.keys(trackVSTPresets))
-    console.log('Final trackVSTPresets sizes:', Object.entries(trackVSTPresets).map(([k,v]) => `${k}: ${v?.length || 0} bytes`))
+    // Update state with captured presets
+    setTrackVSTPresets(capturedVSTPresets)
+    
+    console.log('Final trackVSTPresets keys:', Object.keys(capturedVSTPresets))
+    console.log('Final trackVSTPresets sizes:', Object.entries(capturedVSTPresets).map(([k,v]) => `${k}: ${v?.length || 0} bytes`))
     console.log('[Save] trackBeats with lengths:', Object.entries(trackBeats).map(([k,v]) => `${k}: ${v.lengthBeats || 'no length'} beats`))
     console.log('[Save] trackNotes counts:', Object.entries(trackNotes).map(([k,v]) => `${k}: ${v.length} notes, max pos: ${v.length > 0 ? Math.max(...v.map(n => (n.start || 0) + (n.duration || 0))) : 0}`))
     console.log('[Save] trackOffsets:', trackOffsets)
@@ -432,7 +597,7 @@ function App() {
       trackLengths: currentTrackLengths,
       trackVSTMode,
       trackVSTPlugins,
-      trackVSTPresets,
+      trackVSTPresets: capturedVSTPresets,
       trackMuted,
       trackSoloed,
       trackAutomation
@@ -590,6 +755,8 @@ function App() {
   }, {}))
   // Set VST plugin paths
   setTrackVSTPlugins(nextTrackVSTPlugins)
+  // Set VST presets (to be applied after VSTs are loaded)
+  setTrackVSTPresets(nextTrackVSTPresets)
   // Stay on track timeline view after loading (do not auto-open Piano UI)
   setSelectedTrackId(null)
       setCurrentProjectPath(resp.path || null)
@@ -731,7 +898,7 @@ function App() {
         clearTimeout(autosaveTimerRef.current)
       }
     }
-  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackVSTMode, trackVSTPlugins, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
+  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackVSTMode, trackVSTPlugins, trackVSTPresets, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
 
   const timelineRef = useRef(null)
 
@@ -873,6 +1040,7 @@ function App() {
               trackLengths={trackLengths}
               setTrackLengths={setTrackLengths}
               trackVSTMode={trackVSTMode}
+              trackVSTLoading={trackVSTLoading}
               trackMuted={trackMuted}
               setTrackMuted={setTrackMuted}
               trackSoloed={trackSoloed}
