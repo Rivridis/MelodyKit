@@ -50,6 +50,7 @@ function App() {
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
   const [trackMuted, setTrackMuted] = useState({}) // { trackId: boolean } - track mute status
   const [trackSoloed, setTrackSoloed] = useState({}) // { trackId: boolean } - track solo status
+  const [trackAutomation, setTrackAutomation] = useState({}) // { trackId: { enabled: boolean, type: 'volume'|'pan'|'resonance'|'cutoff', data: { volume: [{beat, value}], pan: [...], resonance: [...], cutoff: [...] } } }
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
   const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.5 to 2)
   const [bpm, setBpm] = useState(120) // Global BPM for playback
@@ -433,7 +434,8 @@ function App() {
       trackVSTPlugins,
       trackVSTPresets,
       trackMuted,
-      trackSoloed
+      trackSoloed,
+      trackAutomation
     }
   }
 
@@ -506,6 +508,7 @@ function App() {
       const nextTrackVSTPresets = (p.trackVSTPresets && typeof p.trackVSTPresets === 'object') ? p.trackVSTPresets : {}
       const nextTrackMuted = (p.trackMuted && typeof p.trackMuted === 'object') ? p.trackMuted : {}
       const nextTrackSoloed = (p.trackSoloed && typeof p.trackSoloed === 'object') ? p.trackSoloed : {}
+      const nextTrackAutomation = (p.trackAutomation && typeof p.trackAutomation === 'object') ? p.trackAutomation : {}
       const nextTrackBeats = {}
       nextTracks.forEach((t) => {
         if (t.type === 'beat' && p.tracks) {
@@ -557,6 +560,8 @@ function App() {
     acc[t.id] = typeof nextTrackSoloed[t.id] === 'boolean' ? nextTrackSoloed[t.id] : false
     return acc
   }, {}))
+  // Set automation states
+  setTrackAutomation(nextTrackAutomation)
   // Set manual track lengths (for MIDI/audio tracks)
   setTrackLengths(nextTrackLengths)
   
@@ -726,7 +731,7 @@ function App() {
         clearTimeout(autosaveTimerRef.current)
       }
     }
-  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackVSTMode, trackVSTPlugins, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
+  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackVSTMode, trackVSTPlugins, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
 
   const timelineRef = useRef(null)
 
@@ -819,6 +824,8 @@ function App() {
           onRenameTrack={handleRenameTrack}
           onDuplicateTrack={handleDuplicateTrack}
           isRestoring={isRestoring}
+          trackAutomation={trackAutomation}
+          onAutomationChange={(trackId, automation) => setTrackAutomation(prev => ({ ...prev, [trackId]: automation }))}
         />
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">
           {selectedTrack ? (
@@ -870,6 +877,8 @@ function App() {
               setTrackMuted={setTrackMuted}
               trackSoloed={trackSoloed}
               setTrackSoloed={setTrackSoloed}
+              trackAutomation={trackAutomation}
+              onAutomationChange={(trackId, automation) => setTrackAutomation(prev => ({ ...prev, [trackId]: automation }))}
               onSelectTrack={setSelectedTrackId}
               onAddTrack={handleAddTrack}
               gridWidth={gridWidth}

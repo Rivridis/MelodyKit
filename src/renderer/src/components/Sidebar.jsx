@@ -5,7 +5,7 @@ const TRACK_COLORS = [
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 ]
 
-function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack, onDuplicateTrack, isRestoring }) {
+function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack, onDuplicateTrack, isRestoring, trackAutomation, onAutomationChange }) {
   const [editingTrackId, setEditingTrackId] = useState(null)
   const [editName, setEditName] = useState('')
   const [openMenuTrackId, setOpenMenuTrackId] = useState(null)
@@ -55,6 +55,42 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
   const handleDuplicate = (trackId) => {
     setOpenMenuTrackId(null)
     onDuplicateTrack?.(trackId)
+  }
+
+  const handleAutomation = (trackId) => {
+    setOpenMenuTrackId(null)
+    const currentAuto = trackAutomation?.[trackId]
+    if (currentAuto?.enabled) {
+      // Toggle off - preserve data
+      onAutomationChange?.(trackId, { ...currentAuto, enabled: false })
+    } else {
+      // Toggle on - preserve existing data if available, otherwise create defaults
+      onAutomationChange?.(trackId, { 
+        enabled: true, 
+        type: currentAuto?.type || 'volume',
+        data: currentAuto?.data || {
+          volume: [{ beat: 0, value: 0.5 }],
+          pan: [{ beat: 0, value: 0.5 }],
+          resonance: [{ beat: 0, value: 0.5 }],
+          cutoff: [{ beat: 0, value: 0.5 }]
+        }
+      })
+    }
+  }
+
+  const handleAutomationTypeChange = (trackId, type) => {
+    const currentAuto = trackAutomation?.[trackId]
+    // Preserve existing data, just change the type
+    onAutomationChange?.(trackId, { 
+      enabled: true, 
+      type,
+      data: currentAuto?.data || {
+        volume: [{ beat: 0, value: 0.5 }],
+        pan: [{ beat: 0, value: 0.5 }],
+        resonance: [{ beat: 0, value: 0.5 }],
+        cutoff: [{ beat: 0, value: 0.5 }]
+      }
+    })
   }
 
   return (
@@ -189,6 +225,18 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
                               Duplicate
                             </button>
                           </li>
+                          <li>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setOpenMenuTrackId(null)
+                                handleAutomation(track.id)
+                              }}
+                              className="w-full text-left px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors"
+                            >
+                              Automation
+                            </button>
+                          </li>
                         </ul>
                       </div>
                     )}
@@ -206,6 +254,28 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
                     ×
                   </button>
                 </div>
+
+                {/* Automation Type Selector */}
+                {trackAutomation?.[track.id]?.enabled && (
+                  <div className="mt-2 pt-2 border-t border-zinc-700" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-400 text-xs">Automation:</span>
+                      <select
+                        value={trackAutomation[track.id]?.type || 'volume'}
+                        onChange={(e) => {
+                          e.stopPropagation()
+                          handleAutomationTypeChange(track.id, e.target.value)
+                        }}
+                        className="flex-1 bg-zinc-800 text-zinc-200 text-xs px-2 py-1 rounded border border-zinc-700 hover:border-zinc-600 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-colors"
+                      >
+                        <option value="volume">Volume</option>
+                        <option value="pan" disabled>Pan</option>
+                        <option value="resonance" disabled>Resonance</option>
+                        <option value="cutoff" disabled>Cutoff</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

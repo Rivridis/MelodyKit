@@ -3,6 +3,7 @@ import { stopAllNotes } from '../utils/soundfontPlayer'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
 import { playBackendNote, noteNameToMidi, loadSF2 } from '@renderer/utils/vstBackend'
 import { encodeToWav } from '@renderer/utils/fastWav'
+import AutomationLane from './AutomationLane'
 
 const BEAT_WIDTH = 40
 const TRACK_HEIGHT = 80
@@ -62,7 +63,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -93,6 +94,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const loopStartRef = useRef(loopStart)
   const loopEndRef = useRef(loopEnd)
   const bpmRef = useRef(bpm)
+  const trackAutomationRef = useRef(trackAutomation)
   const loadedInstrumentsRef = useRef({}) // Store loaded instruments by track ID
   const loadedAudioClipsRef = useRef({}) // Store decoded AudioBuffer by track ID for audio tracks
   const beatSamplePathsRef = useRef({}) // { [trackId]: { [rowId]: filePath } }
@@ -108,8 +110,47 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const perTrackPreGainsRef = useRef({}) // { [trackId]: GainNode } pre-fader boost
   const perTrackSf2BoostGainsRef = useRef({}) // { [trackId]: GainNode } SF2-only boost
 
+  // Helper to get automation volume value at a given beat (0-150%)
+  const getAutomationVolume = (trackId, beat) => {
+    const automation = trackAutomationRef.current?.[trackId]
+    if (!automation?.enabled || automation.type !== 'volume' || !automation.data?.volume) {
+      return null // No automation for volume
+    }
+    
+    const points = automation.data.volume
+    if (!points || points.length === 0) return null
+    
+    // Sort points by beat
+    const sortedPoints = [...points].sort((a, b) => a.beat - b.beat)
+    
+    // If before first point, use first point value
+    if (beat <= sortedPoints[0].beat) {
+      return sortedPoints[0].value * 150 // Convert 0-1 to 0-150%
+    }
+    
+    // If after last point, use last point value
+    if (beat >= sortedPoints[sortedPoints.length - 1].beat) {
+      return sortedPoints[sortedPoints.length - 1].value * 150
+    }
+    
+    // Find the two points to interpolate between
+    for (let i = 0; i < sortedPoints.length - 1; i++) {
+      const p1 = sortedPoints[i]
+      const p2 = sortedPoints[i + 1]
+      
+      if (beat >= p1.beat && beat <= p2.beat) {
+        // Linear interpolation
+        const t = (beat - p1.beat) / (p2.beat - p1.beat)
+        const interpolatedValue = p1.value + t * (p2.value - p1.value)
+        return interpolatedValue * 150 // Convert 0-1 to 0-150%
+      }
+    }
+    
+    return sortedPoints[sortedPoints.length - 1].value * 150
+  }
+
   // Ensure per-track gain chain exists for current context
-  const ensureTrackChain = (trackId) => {
+  const ensureTrackChain = (trackId, currentBeat = null) => {
     const ctx = audioContextRef.current
     if (!ctx) return { pre: null, g: null }
     // Track gain
@@ -117,7 +158,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (!g || (g.context && g.context !== ctx)) {
       try { g?.disconnect() } catch {}
       g = ctx.createGain()
-      const vPct = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+      // Check for automation volume first
+      const autoVolume = currentBeat !== null ? getAutomationVolume(trackId, currentBeat) : null
+      const vPct = autoVolume !== null ? autoVolume : Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
       const v = vPct / 100
       try { g.gain.setValueAtTime(v, ctx.currentTime) } catch { g.gain.value = v }
       if (masterGainRef.current && masterGainRef.current.context === ctx) {
@@ -267,6 +310,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   useEffect(() => { currentBeatRef.current = currentBeat }, [currentBeat])
   useEffect(() => { loopStartRef.current = loopStart }, [loopStart])
   useEffect(() => { loopEndRef.current = loopEnd }, [loopEnd])
+  useEffect(() => { trackAutomationRef.current = trackAutomation }, [trackAutomation])
   
   // Handle BPM changes during playback
   useEffect(() => {
@@ -1006,7 +1050,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   }, [tracks, trackNotes, trackBeats, trackOffsets, gridWidth, hoveredTrack, beatWidth, resizing, dragging])
 
   // Play a note with per-track instrument support
-  const playNote = (trackId, noteName, duration = 0.3) => {
+  const playNote = (trackId, noteName, duration = 0.3, currentBeat = null) => {
     if (!audioContextRef.current) return
     const ctx = audioContextRef.current
     const destination = masterGainRef.current || ctx.destination
@@ -1014,6 +1058,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     const loadedInstrument = loadedInstrumentsRef.current[trackId]
     
     console.log(`Playing note for track ${trackId}:`, noteName, 'Loaded instrument:', loadedInstrument)
+    
+    // Get volume (automation takes priority)
+    const autoVolume = currentBeat !== null ? getAutomationVolume(trackId, currentBeat) : null
+    const volPercent = autoVolume !== null ? autoVolume : Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
     
     // Check if track uses VST backend
     const useVST = trackVSTMode && trackVSTMode[trackId]
@@ -1024,7 +1072,6 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         
         // Send volume CC message before the note to ensure it's applied
         // Map 0-150% volume to MIDI 0-127 range, then reduce by 50% for VST loudness
-        const volPercent = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
         const midiVolume = Math.round((volPercent / 150) * 127 * 0.5)
         window.api.backend.setVolume(String(trackId), midiVolume, 1).catch(() => {})
         
@@ -1042,10 +1089,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (loadedInstrument && loadedInstrument.type === 'sf2-backend') {
       try {
         console.log(`Using SF2 (C++ backend) for track ${trackId}`)
-        // Scale velocity by track volume
-        const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
+        // Scale velocity by track volume (automation or manual)
         const baseVelocity = 0.63 // ~80/127
-        const velocity = baseVelocity * (vol / 100)
+        const velocity = baseVelocity * (volPercent / 100)
         const midiNote = noteNameToMidi(noteName)
         playBackendNote(trackId, midiNote, velocity, Math.floor(duration * 1000), 1)
         return
@@ -1332,6 +1378,22 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         
         setCurrentBeat(beat)
         currentBeatRef.current = beat
+        
+        // Update volume for all tracks (automation or static)
+        tracks.forEach((t) => {
+          const g = perTrackGainsRef.current?.[t.id]
+          if (g && g.context === audioContextRef.current) {
+            const autoVolume = getAutomationVolume(t.id, beat)
+            const vol = autoVolume !== null ? autoVolume : Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
+            const v = vol / 100
+            try {
+              g.gain.setValueAtTime(v, audioContextRef.current.currentTime)
+            } catch {
+              g.gain.value = v
+            }
+          }
+        })
+        
         // High-resolution beat scheduling: run every tick so high step counts (24/32) don't skip
         try {
           tracks.forEach((t) => {
@@ -1361,7 +1423,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             beatLastStepRef.current[t.id] = stepIndex
             p.rows.forEach((row) => {
               if (row.steps?.[stepIndex]) {
-                const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
+                // Use automation volume if available, otherwise use track volume
+                const autoVolume = getAutomationVolume(t.id, beat)
+                const vol = autoVolume !== null ? autoVolume : Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
                 const gainLinear = vol / 100
                 window.api?.backend?.triggerBeat?.(String(t.id), String(row.id), gainLinear)
               }
@@ -1387,7 +1451,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const noteAbsoluteStart = (note.start || 0) + trackOffset
               const noteStartRounded = Math.round(noteAbsoluteStart * subdivisionsPerBeat) / subdivisionsPerBeat
               if (Math.abs(noteStartRounded - positionRounded) < epsilon) {
-                playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000)
+                playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000, beat)
               }
             })
           })
@@ -2003,7 +2067,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               beatLastStepRef.current[t.id] = stepIndex
               p.rows.forEach((row) => {
                 if (row.steps?.[stepIndex]) {
-                  const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
+                  // Use automation volume if available, otherwise use track volume
+                  const autoVolume = getAutomationVolume(t.id, currentBeat)
+                  const vol = autoVolume !== null ? autoVolume : Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100)))
                   const gainLinear = vol / 100
                   window.api?.backend?.triggerBeat?.(String(t.id), String(row.id), gainLinear)
                 }
@@ -2027,7 +2093,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 const noteAbsoluteStart = (note.start || 0) + trackOffset
                 const noteStartRounded = Math.round(noteAbsoluteStart * subdivisionsPerBeat) / subdivisionsPerBeat
                 if (Math.abs(noteStartRounded - positionRounded) < epsilon) {
-                  playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000)
+                  playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000, currentBeat)
                 }
               })
             })
@@ -2582,6 +2648,47 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                       />
                       <span className="text-xs text-zinc-300 select-none" style={{ pointerEvents: 'auto', width: 34, textAlign: 'right' }}>{value}%</span>
                       </div>
+                    </div>
+                  )
+                })}
+              </div>
+              
+              {/* Automation Overlays */}
+              <div style={{ position: 'absolute', left: 0, top: 0, width: gridWidth * beatWidth + SIDEBAR_WIDTH, height: CANVAS_HEIGHT, pointerEvents: 'none' }}>
+                {tracks.map((track, index) => {
+                  const automation = trackAutomation?.[track.id]
+                  if (!automation?.enabled) return null
+                  
+                  const y = index * TRACK_HEIGHT
+                  
+                  return (
+                    <div
+                      key={`automation-${track.id}`}
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: y,
+                        width: gridWidth * beatWidth + SIDEBAR_WIDTH,
+                        height: TRACK_HEIGHT,
+                        pointerEvents: 'auto'
+                      }}
+                    >
+                      <AutomationLane
+                        trackId={track.id}
+                        automationType={automation.type}
+                        beatWidth={BEAT_WIDTH}
+                        zoom={zoom}
+                        trackColor={track.color}
+                        points={automation.data?.[automation.type] || []}
+                        onPointsChange={(newPoints) => {
+                          const newData = { ...automation.data }
+                          newData[automation.type] = newPoints
+                          onAutomationChange?.(track.id, { ...automation, data: newData })
+                        }}
+                        onClose={() => {
+                          onAutomationChange?.(track.id, { ...automation, enabled: false })
+                        }}
+                      />
                     </div>
                   )
                 })}
