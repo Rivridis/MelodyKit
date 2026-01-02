@@ -534,8 +534,8 @@ function App() {
       }
     }
     
-    // Update state with captured presets
-    setTrackVSTPresets(capturedVSTPresets)
+    // Don't update state here - just use capturedVSTPresets in the return value
+    // (updating state here causes infinite autosave loop)
     
     console.log('Final trackVSTPresets keys:', Object.keys(capturedVSTPresets))
     console.log('Final trackVSTPresets sizes:', Object.entries(capturedVSTPresets).map(([k,v]) => `${k}: ${v?.length || 0} bytes`))
@@ -891,7 +891,7 @@ function App() {
         isSavingRef.current = false
         setTimeout(() => setIsAutosaving(false), 500) // Show indicator briefly
       }
-    }, 1000) // debounce 1s for responsive autosave
+    }, 500) // debounce 500ms to batch rapid changes
     
     return () => {
       if (autosaveTimerRef.current) {
