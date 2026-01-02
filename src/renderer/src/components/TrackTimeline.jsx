@@ -62,15 +62,17 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, onLoadingChange, isRestoring }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
   const [hoveredTrack, setHoveredTrack] = useState(null)
   const [resizing, setResizing] = useState(null) // { trackId, startX, startLen, currentLen }
   const [dragging, setDragging] = useState(null) // { trackId, startX, startBeat, currentBeat, offsetBeats }
+  const [loopDragging, setLoopDragging] = useState(null) // { type: 'body'|'start'|'end', startX, initialLoopStart, initialLoopEnd }
   const resizeClickSuppressRef = useRef(false)
   const dragClickSuppressRef = useRef(false)
+  const loopClickSuppressRef = useRef(false)
   const [bpmInput, setBpmInput] = useState(bpm.toString())
   const canvasRef = useRef(null)
   const timelineCanvasRef = useRef(null)
@@ -86,6 +88,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const playbackStartTimeRef = useRef(null)
   const trackNotesRef = useRef(trackNotes)
   const trackInstrumentsRef = useRef(trackInstruments)
+  const loopStartRef = useRef(loopStart)
+  const loopEndRef = useRef(loopEnd)
+  const bpmRef = useRef(bpm)
   const loadedInstrumentsRef = useRef({}) // Store loaded instruments by track ID
   const loadedAudioClipsRef = useRef({}) // Store decoded AudioBuffer by track ID for audio tracks
   const beatSamplePathsRef = useRef({}) // { [trackId]: { [rowId]: filePath } }
@@ -239,6 +244,21 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   useEffect(() => { trackInstrumentsRef.current = trackInstruments }, [trackInstruments])
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
   useEffect(() => { currentBeatRef.current = currentBeat }, [currentBeat])
+  useEffect(() => { loopStartRef.current = loopStart }, [loopStart])
+  useEffect(() => { loopEndRef.current = loopEnd }, [loopEnd])
+  
+  // Handle BPM changes during playback
+  useEffect(() => {
+    const oldBpm = bpmRef.current
+    bpmRef.current = bpm
+    
+    // If BPM changes while playing, recalculate playbackStartTimeRef to maintain current beat position
+    if (isPlayingRef.current && oldBpm !== bpm && playbackStartTimeRef.current !== null) {
+      const newBeatDuration = (60 / bpm) * 1000
+      const currentBeat = currentBeatRef.current
+      playbackStartTimeRef.current = Date.now() - (currentBeat * newBeatDuration)
+    }
+  }, [bpm])
 
   // Ensure per-track gain nodes exist and are connected
   useEffect(() => {
@@ -609,14 +629,26 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       return
     }
     
-    const beatDuration = (60 / bpm) * 1000
-    
     const animate = () => {
       if (!isPlayingRef.current) return
       
+      // Use current BPM from ref for live updates
+      const currentBpm = bpmRef.current
+      const beatDuration = (60 / currentBpm) * 1000
+      
       // Calculate beat position from start time and current time
       const elapsed = Date.now() - playbackStartTimeRef.current
-      const beat = elapsed / beatDuration
+      let beat = elapsed / beatDuration
+      
+      // Visually wrap beat for loop region (actual playback handles this separately)
+      const currentLoopStart = loopStartRef.current
+      const currentLoopEnd = loopEndRef.current
+      const shouldLoop = currentLoopStart !== null && currentLoopEnd !== null && currentLoopEnd > currentLoopStart
+      if (shouldLoop) {
+        // Keep visual playhead in sync with actual playback position
+        beat = currentBeatRef.current
+      }
+      
       drawTimelinePlayhead(beat)
       
       animationFrameRef.current = requestAnimationFrame(animate)
@@ -630,7 +662,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         animationFrameRef.current = null
       }
     }
-  }, [isPlaying, bpm])
+  }, [isPlaying])
 
   // Draw timeline (static background, no playhead)
   useEffect(() => {
@@ -677,11 +709,48 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       }
     }
     
+    // Draw loop region if defined
+    if (loopStart !== null && loopEnd !== null && loopEnd > loopStart) {
+      const loopStartX = SIDEBAR_WIDTH + loopStart * beatWidth
+      const loopEndX = SIDEBAR_WIDTH + loopEnd * beatWidth
+      const loopWidth = loopEndX - loopStartX
+      
+      // Loop region background (semi-transparent yellow)
+      ctx.fillStyle = 'rgba(255, 220, 50, 0.15)'
+      ctx.fillRect(loopStartX, 0, loopWidth, TIMELINE_HEIGHT)
+      
+      // Loop region borders (bright yellow)
+      ctx.strokeStyle = '#ffdc32'
+      ctx.lineWidth = 2
+      ctx.strokeRect(loopStartX, 0, loopWidth, TIMELINE_HEIGHT)
+      
+      // Draw handles at start and end (small triangles)
+      const handleSize = 6
+      const handleY = TIMELINE_HEIGHT / 2
+      
+      // Left handle (triangle pointing right)
+      ctx.fillStyle = '#ffdc32'
+      ctx.beginPath()
+      ctx.moveTo(loopStartX + 2, handleY - handleSize)
+      ctx.lineTo(loopStartX + 2 + handleSize, handleY)
+      ctx.lineTo(loopStartX + 2, handleY + handleSize)
+      ctx.closePath()
+      ctx.fill()
+      
+      // Right handle (triangle pointing left)
+      ctx.beginPath()
+      ctx.moveTo(loopEndX - 2, handleY - handleSize)
+      ctx.lineTo(loopEndX - 2 - handleSize, handleY)
+      ctx.lineTo(loopEndX - 2, handleY + handleSize)
+      ctx.closePath()
+      ctx.fill()
+    }
+    
     // Border
     ctx.strokeStyle = '#3f3f46'
     ctx.lineWidth = 1
     ctx.strokeRect(0, 0, CANVAS_WIDTH, TIMELINE_HEIGHT)
-  }, [gridWidth, beatWidth])
+  }, [gridWidth, beatWidth, loopStart, loopEnd])
 
   // Setup playhead canvas
   useEffect(() => {
@@ -1142,9 +1211,101 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       // Use 16th-note precision like PianoRoll so off-beat notes play
       const subdivisionsPerBeat = 4
       let lastSubdivision = Math.floor(startBeat * subdivisionsPerBeat) - 1
+      
       playbackIntervalRef.current = setInterval(() => {
-        const elapsed = Date.now() - startTime
-        const beat = elapsed / beatDuration
+        // Use current BPM from ref for live updates
+        const currentBpm = bpmRef.current
+        const beatDuration = (60 / currentBpm) * 1000
+        const elapsed = Date.now() - playbackStartTimeRef.current
+        let beat = elapsed / beatDuration
+        
+        // Check current loop state (use refs to get live values)
+        const currentLoopStart = loopStartRef.current
+        const currentLoopEnd = loopEndRef.current
+        const shouldLoop = currentLoopStart !== null && currentLoopEnd !== null && currentLoopEnd > currentLoopStart
+        
+        // If loop is active and current beat is outside loop boundaries, snap back to loop start
+        if (shouldLoop && (beat < currentLoopStart - 0.001 || beat >= currentLoopEnd - 0.001)) {
+          // Jump to loop start
+          playbackStartTimeRef.current = Date.now() - currentLoopStart * beatDuration
+          beat = currentLoopStart
+          // Reset subdivision tracking for note scheduling
+          lastSubdivision = Math.floor(beat * subdivisionsPerBeat) - 1
+          // Reset beat step tracking
+          beatLastStepRef.current = {}
+          
+          // Restart audio clips from loop start
+          try {
+            const ctx = audioContextRef.current
+            const startOffsetSecBase = beat * (60 / currentBpm)
+            // Stop existing audio sources
+            Object.values(audioSourcesRef.current || {}).forEach((s) => { try { s.stop() } catch {} })
+            audioSourcesRef.current = {}
+            
+            // Restart each audio track from the loop position
+            tracks.forEach((t) => {
+              if (t.type === 'audio') {
+                const rec = loadedAudioClipsRef.current?.[t.id]
+                const { g } = ensureTrackChain(t.id)
+                if (rec && rec.buffer && ctx) {
+                  const buf = rec.buffer
+                  const trackOffset = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
+                  const trackOffsetSec = trackOffset * (60 / currentBpm)
+                  const playheadSec = startOffsetSecBase
+                  const trackStartSec = trackOffsetSec
+                  
+                  // Only play if the loop region intersects with this audio clip
+                  const trackEndSec = trackOffsetSec + buf.duration
+                  const loopStartSec = currentLoopStart * (60 / currentBpm)
+                  const loopEndSec = currentLoopEnd * (60 / currentBpm)
+                  
+                  // Check if audio clip is within loop region
+                  if (trackStartSec < loopEndSec && trackEndSec > loopStartSec) {
+                    if (playheadSec >= trackStartSec && playheadSec < trackStartSec + buf.duration) {
+                      // Start from current position in audio
+                      const offsetIntoAudio = playheadSec - trackStartSec
+                      const offset = Math.max(0, Math.min(buf.duration, offsetIntoAudio))
+                      const remaining = buf.duration - offset
+                      
+                      if (remaining > 0.005) {
+                        const src = ctx.createBufferSource()
+                        src.buffer = buf
+                        if (g) {
+                          src.connect(g)
+                        } else if (masterGainRef.current) {
+                          src.connect(masterGainRef.current)
+                        } else {
+                          src.connect(ctx.destination)
+                        }
+                        try { src.start(ctx.currentTime, offset) } catch {}
+                        audioSourcesRef.current[t.id] = src
+                      }
+                    } else if (playheadSec < trackStartSec) {
+                      // Schedule to start in the future
+                      const delaySec = trackStartSec - playheadSec
+                      if (delaySec < (loopEndSec - loopStartSec)) {
+                        const src = ctx.createBufferSource()
+                        src.buffer = buf
+                        if (g) {
+                          src.connect(g)
+                        } else if (masterGainRef.current) {
+                          src.connect(masterGainRef.current)
+                        } else {
+                          src.connect(ctx.destination)
+                        }
+                        try { src.start(ctx.currentTime + delaySec) } catch {}
+                        audioSourcesRef.current[t.id] = src
+                      }
+                    }
+                  }
+                }
+              }
+            })
+          } catch (e) {
+            console.error('Error restarting audio for loop:', e)
+          }
+        }
+        
         setCurrentBeat(beat)
         currentBeatRef.current = beat
         // High-resolution beat scheduling: run every tick so high step counts (24/32) don't skip
@@ -1201,7 +1362,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             })
           })
         }
-        if (beat >= maxEndBeat - 0.001) {
+        
+        // Check for track end (only when not looping)
+        if (!shouldLoop && beat >= maxEndBeat - 0.001) {
+          // Stop playback
           isPlayingRef.current = false
           setIsPlaying(false)
           setCurrentBeat(0)
@@ -1211,7 +1375,6 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             cancelAnimationFrame(animationFrameRef.current)
             animationFrameRef.current = null
           }
-          // Stop audio sources
           try { Object.values(audioSourcesRef.current || {}).forEach((s) => { try { s.stop() } catch {} }); audioSourcesRef.current = {} } catch {}
         }
       }, 16)
@@ -1272,6 +1435,20 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           canvasRef.current.style.cursor = 'default'
         }
       }
+      
+      if (loopDragging) {
+        setLoopDragging(null)
+        // Reset cursor
+        if (timelineCanvasRef.current) {
+          timelineCanvasRef.current.style.cursor = 'pointer'
+        }
+        // Don't trigger timeline click after loop drag
+        if (loopClickSuppressRef.current) {
+          setTimeout(() => {
+            loopClickSuppressRef.current = false
+          }, 10)
+        }
+      }
     }
 
     const handleGlobalMouseMove = (e) => {
@@ -1296,9 +1473,50 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         newLen = bars * 4
         setResizing((prev) => (prev ? { ...prev, currentLen: newLen } : prev))
       }
+      
+      if (loopDragging) {
+        const rect = timelineCanvasRef.current?.getBoundingClientRect() || canvasRef.current.getBoundingClientRect()
+        const x = e.clientX - rect.left
+        const beatAtMouse = Math.max(0, (x - SIDEBAR_WIDTH) / beatWidth)
+        const dx = beatAtMouse - (loopDragging.startX - SIDEBAR_WIDTH) / beatWidth
+        
+        // Update cursor during drag
+        if (timelineCanvasRef.current) {
+          if (loopDragging.type === 'body') {
+            timelineCanvasRef.current.style.cursor = 'grabbing'
+          } else {
+            timelineCanvasRef.current.style.cursor = 'ew-resize'
+          }
+        }
+        
+        if (loopDragging.type === 'start') {
+          // Drag start handle
+          let newStart = Math.max(0, loopDragging.initialLoopStart + dx)
+          newStart = Math.round(newStart * 4) / 4 // Snap to 16th notes
+          // Ensure start < end
+          if (newStart < loopDragging.initialLoopEnd - 0.25) {
+            setLoopStart(newStart)
+          }
+        } else if (loopDragging.type === 'end') {
+          // Drag end handle
+          let newEnd = Math.max(0, loopDragging.initialLoopEnd + dx)
+          newEnd = Math.round(newEnd * 4) / 4 // Snap to 16th notes
+          // Ensure end > start
+          if (newEnd > loopDragging.initialLoopStart + 0.25) {
+            setLoopEnd(newEnd)
+          }
+        } else if (loopDragging.type === 'body') {
+          // Drag entire loop region
+          const loopLength = loopDragging.initialLoopEnd - loopDragging.initialLoopStart
+          let newStart = Math.max(0, loopDragging.initialLoopStart + dx)
+          newStart = Math.round(newStart * 4) / 4 // Snap to 16th notes
+          setLoopStart(newStart)
+          setLoopEnd(newStart + loopLength)
+        }
+      }
     }
 
-    if (resizing || dragging) {
+    if (resizing || dragging || loopDragging) {
       window.addEventListener('mouseup', handleGlobalMouseUp)
       window.addEventListener('mousemove', handleGlobalMouseMove)
       return () => {
@@ -1306,7 +1524,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         window.removeEventListener('mousemove', handleGlobalMouseMove)
       }
     }
-  }, [resizing, dragging, beatWidth, setTrackBeats])
+  }, [resizing, dragging, loopDragging, beatWidth, setTrackBeats])
 
   // Handle canvas click - just open piano roll
   const handleCanvasClick = (e) => {
@@ -1505,8 +1723,107 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     }
   }
 
+  // Timeline mouse down to handle loop region dragging
+  const handleTimelineMouseDown = (e) => {
+    if (isRestoring) return
+    
+    const rect = timelineCanvasRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    
+    if (x < SIDEBAR_WIDTH) return
+    
+    // Check if clicking on loop region
+    if (loopStart !== null && loopEnd !== null && loopEnd > loopStart) {
+      const loopStartX = SIDEBAR_WIDTH + loopStart * beatWidth
+      const loopEndX = SIDEBAR_WIDTH + loopEnd * beatWidth
+      const handleSize = 8 // Click tolerance for handles
+      
+      // Check if clicking on start handle
+      if (Math.abs(x - loopStartX) <= handleSize) {
+        setLoopDragging({ 
+          type: 'start', 
+          startX: x, 
+          initialLoopStart: loopStart, 
+          initialLoopEnd: loopEnd 
+        })
+        loopClickSuppressRef.current = true
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      
+      // Check if clicking on end handle
+      if (Math.abs(x - loopEndX) <= handleSize) {
+        setLoopDragging({ 
+          type: 'end', 
+          startX: x, 
+          initialLoopStart: loopStart, 
+          initialLoopEnd: loopEnd 
+        })
+        loopClickSuppressRef.current = true
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      
+      // Check if clicking inside loop region body
+      if (x >= loopStartX && x <= loopEndX) {
+        setLoopDragging({ 
+          type: 'body', 
+          startX: x, 
+          initialLoopStart: loopStart, 
+          initialLoopEnd: loopEnd 
+        })
+        loopClickSuppressRef.current = true
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+    }
+  }
+
+  // Timeline mouse move for hover cursor
+  const handleTimelineMouseMove = (e) => {
+    if (!timelineCanvasRef.current || loopDragging) return
+    
+    const rect = timelineCanvasRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    
+    if (x < SIDEBAR_WIDTH) {
+      timelineCanvasRef.current.style.cursor = 'default'
+      return
+    }
+    
+    // Check if hovering over loop region
+    if (loopStart !== null && loopEnd !== null && loopEnd > loopStart) {
+      const loopStartX = SIDEBAR_WIDTH + loopStart * beatWidth
+      const loopEndX = SIDEBAR_WIDTH + loopEnd * beatWidth
+      const handleSize = 8
+      
+      // Check if hovering on start or end handle
+      if (Math.abs(x - loopStartX) <= handleSize || Math.abs(x - loopEndX) <= handleSize) {
+        timelineCanvasRef.current.style.cursor = 'ew-resize'
+        return
+      }
+      
+      // Check if hovering inside loop region body
+      if (x >= loopStartX && x <= loopEndX) {
+        timelineCanvasRef.current.style.cursor = 'grab'
+        return
+      }
+    }
+    
+    timelineCanvasRef.current.style.cursor = 'pointer'
+  }
+
   // Timeline click to seek
   const handleTimelineClick = (e) => {
+    // Suppress click after loop drag
+    if (loopClickSuppressRef.current) {
+      loopClickSuppressRef.current = false
+      return
+    }
+    
     const rect = timelineCanvasRef.current.getBoundingClientRect()
     const x = e.clientX - rect.left
     if (x >= SIDEBAR_WIDTH) {
@@ -1957,6 +2274,41 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           <h2 className="text-white font-semibold text-base select-none">Arrangement</h2>
         </div>
 
+        {/* Loop controls */}
+        <div className="flex items-center gap-2 ml-2 border-l border-zinc-700 pl-3">
+          <button
+            onClick={() => {
+              if (loopStart !== null && loopEnd !== null) {
+                // Disable loop
+                setLoopStart(null)
+                setLoopEnd(null)
+              } else {
+                // Enable loop at current playhead position (4 beats long)
+                const start = Math.floor(currentBeat / 4) * 4 // Snap to nearest bar
+                setLoopStart(start)
+                setLoopEnd(start + 4)
+              }
+            }}
+            className={`inline-flex items-center justify-center h-9 px-3 rounded-md transition-colors text-sm font-medium ${
+              loopStart !== null && loopEnd !== null
+                ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+            }`}
+            title={loopStart !== null && loopEnd !== null ? 'Disable Loop' : 'Enable Loop at Current Position'}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" className="mr-1.5">
+              <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"></path>
+            </svg>
+            Loop
+          </button>
+          
+          {loopStart !== null && loopEnd !== null && (
+            <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <span>{loopStart.toFixed(1)} - {loopEnd.toFixed(1)}</span>
+            </div>
+          )}
+        </div>
+
         <div className="flex-1" />
 
         {/* Save WAV */}
@@ -2058,6 +2410,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                   borderBottom: '1px solid #3f3f46'
                 }}
                 onClick={handleTimelineClick}
+                onMouseDown={handleTimelineMouseDown}
+                onMouseMove={handleTimelineMouseMove}
               />
               <canvas
                 ref={timelinePlayheadCanvasRef}

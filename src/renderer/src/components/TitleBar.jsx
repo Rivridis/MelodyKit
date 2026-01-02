@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
+import Metronome from './Metronome'
 
-function TitleBar({ onNewProject, onLoadProject, onSaveAsProject, onExportWav, onImportAudio, currentProjectPath, loading, isAutosaving }) {
+function TitleBar({ onNewProject, onLoadProject, onSaveAsProject, onExportWav, onImportAudio, currentProjectPath, loading, isAutosaving, bpm }) {
+  const [metronomeOn, setMetronomeOn] = useState(false)
   const [fileOpen, setFileOpen] = useState(false)
   const menuRef = useRef(null)
 
@@ -73,8 +75,11 @@ function TitleBar({ onNewProject, onLoadProject, onSaveAsProject, onExportWav, o
         </div>
       </div>
 
-      {/* Right: Window buttons */}
+      {/* Right: Metronome + Window buttons */}
       <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' }}>
+        {/* Metronome */}
+        <Metronome bpm={bpm} isPlaying={metronomeOn} onPlayingChange={setMetronomeOn} />
+        
         {/* Autosave indicator */}
         {isAutosaving && (
           <div className="flex items-center gap-2 mr-3 px-2 py-1 text-xs text-amber-300">

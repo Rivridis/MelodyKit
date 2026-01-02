@@ -51,6 +51,8 @@ function App() {
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
   const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.5 to 2)
   const [bpm, setBpm] = useState(120) // Global BPM for playback
+  const [loopStart, setLoopStart] = useState(null) // Loop region start (in beats), null = no loop
+  const [loopEnd, setLoopEnd] = useState(null) // Loop region end (in beats), null = no loop
   const [currentProjectPath, setCurrentProjectPath] = useState(null)
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
   const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
@@ -344,6 +346,8 @@ function App() {
       bpm,
       gridWidth,
       zoom,
+      loopStart,
+      loopEnd,
       tracks: tracks.map(t => ({
         id: t.id,
         name: t.name,
@@ -416,6 +420,8 @@ function App() {
       const nextBpm = typeof p.bpm === 'number' ? p.bpm : 120
       const nextGrid = typeof p.gridWidth === 'number' ? p.gridWidth : 32
       const nextZoom = typeof p.zoom === 'number' ? p.zoom : 1
+      const nextLoopStart = typeof p.loopStart === 'number' ? p.loopStart : null
+      const nextLoopEnd = typeof p.loopEnd === 'number' ? p.loopEnd : null
       const nextTracks = Array.isArray(p.tracks) ? p.tracks.map(t => ({
         id: t.id,
         name: t.name || 'Track',
@@ -461,6 +467,8 @@ function App() {
       setBpm(nextBpm)
       setGridWidth(nextGrid)
       setZoom(nextZoom)
+      setLoopStart(nextLoopStart)
+      setLoopEnd(nextLoopEnd)
   setTracks(recomputedTracks)
   setTrackNotes(nextTrackNotes)
   setTrackInstruments(nextTrackInstruments)
@@ -677,6 +685,7 @@ function App() {
         currentProjectPath={currentProjectPath}
         loading={isLoading || isRestoring}
         isAutosaving={isAutosaving}
+        bpm={bpm}
       />
       {showWelcome && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 backdrop-blur">
@@ -790,6 +799,10 @@ function App() {
               setZoom={setZoom}
               bpm={bpm}
               setBpm={setBpm}
+              loopStart={loopStart}
+              setLoopStart={setLoopStart}
+              loopEnd={loopEnd}
+              setLoopEnd={setLoopEnd}
               onLoadingChange={setIsLoading}
               isRestoring={isRestoring}
             />
