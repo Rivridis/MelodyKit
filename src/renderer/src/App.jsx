@@ -48,6 +48,8 @@ function App() {
   const [trackLengths, setTrackLengths] = useState({}) // { trackId: lengthBeats } - manual length for MIDI/audio tracks
   const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
+  const [trackMuted, setTrackMuted] = useState({}) // { trackId: boolean } - track mute status
+  const [trackSoloed, setTrackSoloed] = useState({}) // { trackId: boolean } - track solo status
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
   const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.5 to 2)
   const [bpm, setBpm] = useState(120) // Global BPM for playback
@@ -102,6 +104,9 @@ function App() {
       ...prev,
       [newTrack.id]: false
     }))
+    // Default mute/solo off
+    setTrackMuted(prev => ({ ...prev, [newTrack.id]: false }))
+    setTrackSoloed(prev => ({ ...prev, [newTrack.id]: false }))
   }
 
   // Add new beat (drum) track and open sequencer editor
@@ -119,6 +124,8 @@ function App() {
     setTrackVolumes((prev) => ({ ...prev, [id]: 100 }))
     setTrackBeats((prev) => ({ ...prev, [id]: { steps: 16, rows: [] } }))
     setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
+    setTrackMuted(prev => ({ ...prev, [id]: false }))
+    setTrackSoloed(prev => ({ ...prev, [id]: false }))
     // Do not auto-open sequencer; stay on current view
   }
 
@@ -158,10 +165,16 @@ function App() {
       setTrackVolumes(newVolumes)
       // Set default offsets
       const newOffsets = { ...trackOffsets }
+      const newMuted = { ...trackMuted }
+      const newSoloed = { ...trackSoloed }
       newTracks.forEach(t => {
         newOffsets[t.id] = 0
+        newMuted[t.id] = false
+        newSoloed[t.id] = false
       })
       setTrackOffsets(newOffsets)
+      setTrackMuted(newMuted)
+      setTrackSoloed(newSoloed)
     } catch (e) {
       console.error('Error importing audio:', e)
     }
@@ -185,6 +198,12 @@ function App() {
   const newTrackOffsets = { ...trackOffsets }
   delete newTrackOffsets[trackId]
   setTrackOffsets(newTrackOffsets)
+  const newTrackMuted = { ...trackMuted }
+  delete newTrackMuted[trackId]
+  setTrackMuted(newTrackMuted)
+  const newTrackSoloed = { ...trackSoloed }
+  delete newTrackSoloed[trackId]
+  setTrackSoloed(newTrackSoloed)
     // Clear backend beat resources if this was a beat track
     window.api?.backend?.clearBeat?.(String(trackId)).catch(() => {})
     
@@ -370,7 +389,9 @@ function App() {
       trackLengths: currentTrackLengths,
       trackVSTMode,
       trackVSTPlugins,
-      trackVSTPresets
+      trackVSTPresets,
+      trackMuted,
+      trackSoloed
     }
   }
 
@@ -441,6 +462,8 @@ function App() {
       const nextTrackVSTMode = (p.trackVSTMode && typeof p.trackVSTMode === 'object') ? p.trackVSTMode : {}
       const nextTrackVSTPlugins = (p.trackVSTPlugins && typeof p.trackVSTPlugins === 'object') ? p.trackVSTPlugins : {}
       const nextTrackVSTPresets = (p.trackVSTPresets && typeof p.trackVSTPresets === 'object') ? p.trackVSTPresets : {}
+      const nextTrackMuted = (p.trackMuted && typeof p.trackMuted === 'object') ? p.trackMuted : {}
+      const nextTrackSoloed = (p.trackSoloed && typeof p.trackSoloed === 'object') ? p.trackSoloed : {}
       const nextTrackBeats = {}
       nextTracks.forEach((t) => {
         if (t.type === 'beat' && p.tracks) {
@@ -481,6 +504,15 @@ function App() {
   // default offset to 0 for any missing track ids
   setTrackOffsets(recomputedTracks.reduce((acc, t) => {
     acc[t.id] = typeof nextTrackOffsets[t.id] === 'number' ? nextTrackOffsets[t.id] : 0
+    return acc
+  }, {}))
+  // Set mute/solo states with defaults
+  setTrackMuted(recomputedTracks.reduce((acc, t) => {
+    acc[t.id] = typeof nextTrackMuted[t.id] === 'boolean' ? nextTrackMuted[t.id] : false
+    return acc
+  }, {}))
+  setTrackSoloed(recomputedTracks.reduce((acc, t) => {
+    acc[t.id] = typeof nextTrackSoloed[t.id] === 'boolean' ? nextTrackSoloed[t.id] : false
     return acc
   }, {}))
   // Set manual track lengths (for MIDI/audio tracks)
@@ -791,6 +823,10 @@ function App() {
               trackLengths={trackLengths}
               setTrackLengths={setTrackLengths}
               trackVSTMode={trackVSTMode}
+              trackMuted={trackMuted}
+              setTrackMuted={setTrackMuted}
+              trackSoloed={trackSoloed}
+              setTrackSoloed={setTrackSoloed}
               onSelectTrack={setSelectedTrackId}
               onAddTrack={handleAddTrack}
               gridWidth={gridWidth}

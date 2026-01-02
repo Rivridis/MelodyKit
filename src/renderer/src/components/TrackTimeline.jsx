@@ -62,7 +62,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -88,6 +88,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const playbackStartTimeRef = useRef(null)
   const trackNotesRef = useRef(trackNotes)
   const trackInstrumentsRef = useRef(trackInstruments)
+  const trackMutedRef = useRef(trackMuted)
+  const trackSoloedRef = useRef(trackSoloed)
   const loopStartRef = useRef(loopStart)
   const loopEndRef = useRef(loopEnd)
   const bpmRef = useRef(bpm)
@@ -137,6 +139,23 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       try { pre.connect(g) } catch {}
     }
     return { pre, g }
+  }
+
+  // Helper to determine if a track should be audible based on mute/solo states
+  const isTrackAudible = (trackId) => {
+    // If track is muted, it's not audible
+    if (trackMutedRef.current?.[trackId]) return false
+    
+    // Check if any track is soloed
+    const anySoloed = tracks.some(t => trackSoloedRef.current?.[t.id])
+    
+    // If any track is soloed, only soloed tracks are audible
+    if (anySoloed) {
+      return trackSoloedRef.current?.[trackId] || false
+    }
+    
+    // Otherwise, track is audible (not muted and nothing soloed)
+    return true
   }
 
   // Calculate beat width based on zoom level
@@ -242,6 +261,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   useEffect(() => { trackNotesRef.current = trackNotes }, [trackNotes])
   useEffect(() => { trackInstrumentsRef.current = trackInstruments }, [trackInstruments])
+  useEffect(() => { trackMutedRef.current = trackMuted }, [trackMuted])
+  useEffect(() => { trackSoloedRef.current = trackSoloed }, [trackSoloed])
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
   useEffect(() => { currentBeatRef.current = currentBeat }, [currentBeat])
   useEffect(() => { loopStartRef.current = loopStart }, [loopStart])
@@ -1153,6 +1174,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         Object.values(audioSourcesRef.current || {}).forEach((s) => { try { s.stop() } catch {} })
         audioSourcesRef.current = {}
         tracks.forEach((t) => {
+          // Check if track should be audible (mute/solo)
+          if (!isTrackAudible(t.id)) return
+          
           if (t.type === 'audio') {
             const rec = loadedAudioClipsRef.current?.[t.id]
             const { g } = ensureTrackChain(t.id)
@@ -1312,6 +1336,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         try {
           tracks.forEach((t) => {
             if (t.type !== 'beat') return
+            // Check if track should be audible (mute/solo)
+            if (!isTrackAudible(t.id)) return
+            
             const p = trackBeats?.[t.id]
             if (!p || !Array.isArray(p.rows) || !p.steps) return
             // Get beat track start position from unified trackOffsets
@@ -1351,6 +1378,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           const epsilon = 0.001
           // Play notes from all tracks with their instruments, applying track offsets
           Object.entries(trackNotesRef.current).forEach(([trackId, notes]) => {
+            // Check if track should be audible
+            if (!isTrackAudible(Number(trackId))) return
+            
             const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
             notes.forEach(note => {
               // Apply track offset to note position
@@ -1853,6 +1883,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           audioSourcesRef.current = {}
           tracks.forEach((t) => {
             if (t.type === 'audio') {
+              // Check if track should be audible (mute/solo)
+              if (!isTrackAudible(t.id)) return
+              
               const rec = loadedAudioClipsRef.current?.[t.id]
               const { g } = ensureTrackChain(t.id)
               if (rec && rec.buffer && ctx) {
@@ -1946,6 +1979,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           try {
             tracks.forEach((t) => {
               if (t.type !== 'beat') return
+              // Check if track should be audible (mute/solo)
+              if (!isTrackAudible(t.id)) return
+              
               const p = trackBeats?.[t.id]
               if (!p || !Array.isArray(p.rows) || !p.steps) return
                 // Get beat track start position from unified trackOffsets
@@ -1982,6 +2018,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             const positionRounded = Math.round(currentPosition * subdivisionsPerBeat) / subdivisionsPerBeat
             const epsilon = 0.001
             Object.entries(trackNotesRef.current).forEach(([trackId, notes]) => {
+              // Check if track should be audible (mute/solo)
+              if (!isTrackAudible(Number(trackId))) return
+              
               const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
               notes.forEach(note => {
                 // Apply track offset to note position
@@ -2074,6 +2113,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       // Collect MIDI notes (VST + SF2 tracks)
       const notePayload = []
       Object.entries(trackNotesRef.current || {}).forEach(([trackId, notes]) => {
+        // Check if track should be audible (mute/solo)
+        if (!isTrackAudible(Number(trackId))) return
+        
         const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
         notes.forEach((note) => {
           const startBeat = (note.start || 0) + trackOffset
@@ -2096,6 +2138,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       const beatPayload = []
       tracks.forEach((t) => {
         if (t.type !== 'beat') return
+        // Check if track should be audible (mute/solo)
+        if (!isTrackAudible(t.id)) return
+        
         const pattern = trackBeats?.[t.id]
         if (!pattern || !Array.isArray(pattern.rows)) return
 
@@ -2128,6 +2173,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       const audioPayload = []
       for (const t of tracks) {
         if (t.type !== 'audio') continue
+        // Check if track should be audible (mute/solo)
+        if (!isTrackAudible(t.id)) continue
 
         const startBeat = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
         const trackGain = Math.max(0, Math.min(150, Number(trackVolumes?.[t.id] ?? 100))) / 100
@@ -2455,29 +2502,66 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                   pointerEvents: 'none'
                 }}
               />
-              {/* Overlay per-track volume sliders within sidebar area */}
+              {/* Overlay per-track controls within sidebar area */}
               <div
                 style={{ position: 'absolute', left: 0, top: 0, width: SIDEBAR_WIDTH, pointerEvents: 'none' }}
               >
                 {tracks.map((track, index) => {
                   const y = index * TRACK_HEIGHT
                   const padding = 12
-                  const sliderTop = y + 44 // below name + notes
+                  const buttonsTop = y + 40 // below track name
+                  const sliderTop = y + 62 // below buttons
                   const sliderWidth = SIDEBAR_WIDTH - padding * 2
                   const value = (trackVolumes?.[track.id] ?? 100)
+                  const isMuted = trackMuted?.[track.id] || false
+                  const isSoloed = trackSoloed?.[track.id] || false
+                  const anySoloed = tracks.some(t => trackSoloed?.[t.id])
+                  const isAudible = !isMuted && (!anySoloed || isSoloed)
+                  
                   return (
-                    <div
-                      key={track.id}
-                      style={{ position: 'absolute', left: padding + 4, top: sliderTop, width: sliderWidth - 8 }}
-                      className="flex items-center gap-2"
-                    >
-                      <input
-                        type="range"
-                        min={0}
-                        max={150}
-                        step={1}
-                        value={value}
-                        aria-label={`Volume for ${track.name}`}
+                    <div key={track.id}>
+                      {/* Mute/Solo buttons */}
+                      <div
+                        style={{ position: 'absolute', right: padding + 4, top: buttonsTop, display: 'flex', gap: 4 }}
+                      >
+                        <button
+                          onClick={() => setTrackMuted?.(prev => ({ ...prev, [track.id]: !prev[track.id] }))}
+                          className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
+                            isMuted 
+                              ? 'bg-amber-500 text-zinc-900' 
+                              : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+                          }`}
+                          style={{ pointerEvents: 'auto' }}
+                          aria-label={`${isMuted ? 'Unmute' : 'Mute'} ${track.name}`}
+                        >
+                          M
+                        </button>
+                        <button
+                          onClick={() => setTrackSoloed?.(prev => ({ ...prev, [track.id]: !prev[track.id] }))}
+                          className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
+                            isSoloed 
+                              ? 'bg-amber-500 text-zinc-900' 
+                              : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+                          }`}
+                          style={{ pointerEvents: 'auto' }}
+                          aria-label={`${isSoloed ? 'Unsolo' : 'Solo'} ${track.name}`}
+                        >
+                          S
+                        </button>
+                      </div>
+                      
+                      {/* Volume slider */}
+                      <div
+                        style={{ position: 'absolute', left: padding + 4, top: sliderTop, width: sliderWidth - 8 }}
+                        className="flex items-center gap-2"
+                      >
+                        <input
+                          type="range"
+                          min={0}
+                          max={150}
+                          step={1}
+                          value={value}
+                          aria-label={`Volume for ${track.name}`}
                         onChange={(e) => {
                           const v = Number(e.target.value)
                           setTrackVolumes?.((prev) => ({ ...prev, [track.id]: v }))
@@ -2497,6 +2581,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                         style={{ pointerEvents: 'auto' }}
                       />
                       <span className="text-xs text-zinc-300 select-none" style={{ pointerEvents: 'auto', width: 34, textAlign: 'right' }}>{value}%</span>
+                      </div>
                     </div>
                   )
                 })}
