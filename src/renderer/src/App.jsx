@@ -219,6 +219,48 @@ function App() {
     setTracks(tracks.map(t => t.id === trackId ? { ...t, name: newName } : t))
   }
 
+  // Duplicate track
+  const handleDuplicateTrack = (trackId) => {
+    const trackToDuplicate = tracks.find(t => t.id === trackId)
+    if (!trackToDuplicate) return
+    
+    const newId = Date.now()
+    const newTrack = {
+      ...trackToDuplicate,
+      id: newId,
+      name: trackToDuplicate.type === 'beat' ? `Beat ${tracks.length + 1}` : `Track ${tracks.length + 1}`,
+      noteCount: trackToDuplicate.noteCount
+    }
+    
+    // Add duplicated track after the original
+    const trackIndex = tracks.findIndex(t => t.id === trackId)
+    const newTracks = [...tracks]
+    newTracks.splice(trackIndex + 1, 0, newTrack)
+    setTracks(newTracks)
+    
+    // Copy track data
+    if (trackNotes[trackId]) {
+      setTrackNotes(prev => ({ ...prev, [newId]: [...trackNotes[trackId]] }))
+    }
+    if (trackInstruments[trackId]) {
+      setTrackInstruments(prev => ({ ...prev, [newId]: trackInstruments[trackId] }))
+    }
+    if (trackBeats[trackId]) {
+      setTrackBeats(prev => ({ ...prev, [newId]: { ...trackBeats[trackId], rows: trackBeats[trackId].rows?.map(r => ({ ...r })) || [] } }))
+    }
+    setTrackVolumes(prev => ({ ...prev, [newId]: trackVolumes[trackId] ?? 100 }))
+    setTrackOffsets(prev => ({ ...prev, [newId]: trackOffsets[trackId] ?? 0 }))
+    setTrackLengths(prev => ({ ...prev, [newId]: trackLengths[trackId] }))
+    setTrackVSTMode(prev => ({ ...prev, [newId]: trackVSTMode[trackId] ?? false }))
+    setTrackMuted(prev => ({ ...prev, [newId]: trackMuted[trackId] ?? false }))
+    setTrackSoloed(prev => ({ ...prev, [newId]: trackSoloed[trackId] ?? false }))
+    
+    // Copy VST plugin if present
+    if (trackVSTPlugins[trackId]) {
+      setTrackVSTPlugins(prev => ({ ...prev, [newId]: trackVSTPlugins[trackId] }))
+    }
+  }
+
   // Update notes for a track
   const handleNotesChange = (trackId, notes) => {
     console.log(`[Notes] Track ${trackId} updated with ${notes.length} notes, max position:`, 
@@ -775,6 +817,7 @@ function App() {
           onAddBeatTrack={handleAddBeatTrack}
           onDeleteTrack={handleDeleteTrack}
           onRenameTrack={handleRenameTrack}
+          onDuplicateTrack={handleDuplicateTrack}
           isRestoring={isRestoring}
         />
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">

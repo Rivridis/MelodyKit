@@ -1,13 +1,15 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 const TRACK_COLORS = [
   '#ef4444', '#f59e0b', '#10b981', '#3b82f6', 
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 ]
 
-function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack, isRestoring }) {
+function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack, onDuplicateTrack, isRestoring }) {
   const [editingTrackId, setEditingTrackId] = useState(null)
   const [editName, setEditName] = useState('')
+  const [openMenuTrackId, setOpenMenuTrackId] = useState(null)
+  const menuRef = useRef(null)
 
   const handleAddTrack = () => {
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
@@ -37,6 +39,22 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
       setEditingTrackId(null)
       setEditName('')
     }
+  }
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setOpenMenuTrackId(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleDuplicate = (trackId) => {
+    setOpenMenuTrackId(null)
+    onDuplicateTrack?.(trackId)
   }
 
   return (
@@ -141,6 +159,39 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
                     <div className="text-zinc-500 text-xs mt-1">
                       {track.noteCount || 0} notes
                     </div>
+                  </div>
+
+                  {/* Cog menu button */}
+                  <div className="relative" ref={openMenuTrackId === track.id ? menuRef : null}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setOpenMenuTrackId(openMenuTrackId === track.id ? null : track.id)
+                      }}
+                      className="flex-shrink-0 w-6 h-6 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors flex items-center justify-center"
+                      title="Track options"
+                    >
+                      ⚙
+                    </button>
+                    
+                    {/* Dropdown menu */}
+                    {openMenuTrackId === track.id && (
+                      <div className="absolute right-0 top-full mt-1 w-40 bg-zinc-900 border border-zinc-700 rounded-md shadow-lg z-50">
+                        <ul className="py-1">
+                          <li>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDuplicate(track.id)
+                              }}
+                              className="w-full text-left px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors"
+                            >
+                              Duplicate
+                            </button>
+                          </li>
+                        </ul>
+                      </div>
+                    )}
                   </div>
 
                   {/* Delete button */}
