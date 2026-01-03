@@ -81,6 +81,10 @@ function App() {
 
   // Add new track
   const handleAddTrack = () => {
+    if (tracks.length >= 8) {
+      window.alert('Track limit reached (8 tracks in BETA). Delete a track to add a new one.')
+      return
+    }
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const newTrack = {
       id: Date.now(),
@@ -117,6 +121,10 @@ function App() {
 
   // Add new beat (drum) track and open sequencer editor
   const handleAddBeatTrack = () => {
+    if (tracks.length >= 8) {
+      window.alert('Track limit reached (8 tracks in BETA). Delete a track to add a new one.')
+      return
+    }
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const id = Date.now()
     const newTrack = {
@@ -136,6 +144,10 @@ function App() {
   }
 
   const handleAddSamplerTrack = () => {
+    if (tracks.length >= 8) {
+      window.alert('Track limit reached (8 tracks in BETA). Delete a track to add a new one.')
+      return
+    }
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const id = Date.now()
     const newTrack = {
@@ -156,6 +168,10 @@ function App() {
   // Import audio file(s) as new audio tracks
   const handleImportAudio = async () => {
     try {
+      if (tracks.length >= 8) {
+        window.alert('Track limit reached (8 tracks in BETA). Delete a track to add a new one.')
+        return
+      }
       const resp = await window.api?.openAudioFiles?.()
       if (!resp) return
       if (!resp.ok || !Array.isArray(resp.files) || resp.files.length === 0) {
@@ -163,11 +179,16 @@ function App() {
         if (resp && resp.error) console.error('Audio import failed:', resp.error)
         return
       }
-      // Add one track per imported file
+      // Add one track per imported file (respecting beta limit)
+      const availableSlots = 8 - tracks.length
+      const filesToImport = resp.files.slice(0, availableSlots)
+      if (resp.files.length > availableSlots) {
+        window.alert(`Only importing ${availableSlots} of ${resp.files.length} files due to 8-track BETA limit.`)
+      }
       const newTracks = []
       const newVolumes = { ...trackVolumes }
       const now = Date.now()
-      resp.files.forEach((file, idx) => {
+      filesToImport.forEach((file, idx) => {
         const color = TRACK_COLORS[(tracks.length + newTracks.length) % TRACK_COLORS.length]
         const id = now + idx
         const track = {
@@ -1063,7 +1084,7 @@ function App() {
               </div>
               <div className="flex-1 space-y-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">New Session</p>
-                <h1 className="text-3xl font-semibold text-white">MelodyKit <span className="text-zinc-400">by Rivridis</span></h1>
+                <h1 className="text-3xl font-semibold text-white">MelodyKit <span className="text-lg text-amber-400 font-medium">BETA</span> <span className="text-zinc-400">by Rivridis</span></h1>
                 <p className="text-sm leading-relaxed text-zinc-200">
                   Shape ideas like a professional! Add a track, drop in a loop, or open an existing project.
                 </p>
