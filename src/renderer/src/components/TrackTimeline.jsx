@@ -2202,11 +2202,19 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     try {
       const beatDuration = 60.0 / bpm
 
-      // Collect MIDI notes (VST + SF2 tracks)
+      // Collect MIDI notes (VST + SF2 + Sampler tracks)
       const notePayload = []
+      console.log('[Export] All tracks:', tracks.map(t => ({ id: t.id, name: t.name, type: t.type })))
+      console.log('[Export] trackNotesRef.current keys:', Object.keys(trackNotesRef.current || {}))
       Object.entries(trackNotesRef.current || {}).forEach(([trackId, notes]) => {
         // Check if track should be audible (mute/solo)
-        if (!isTrackAudible(Number(trackId))) return
+        if (!isTrackAudible(Number(trackId))) {
+          console.log(`[Export] Track ${trackId} is not audible (muted/soloed), skipping`)
+          return
+        }
+        
+        const track = tracks.find(t => t.id == trackId)
+        console.log(`[Export] Processing track ${trackId} (type: ${track?.type}): ${notes.length} notes`)
         
         const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
         notes.forEach((note) => {
@@ -2225,6 +2233,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           })
         })
       })
+      console.log(`[Export] Total notes collected: ${notePayload.length}`)
 
       // Collect beat trigger events for backend sampler
       const beatPayload = []
