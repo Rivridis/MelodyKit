@@ -1063,7 +1063,7 @@ function App() {
               </div>
               <div className="flex-1 space-y-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">New Session</p>
-                <h1 className="text-3xl font-semibold text-white">Welcome to MelodyKit</h1>
+                <h1 className="text-3xl font-semibold text-white">MelodyKit <span className="text-zinc-400">by Rivridis</span></h1>
                 <p className="text-sm leading-relaxed text-zinc-200">
                   Shape ideas like a professional! Add a track, drop in a loop, or open an existing project.
                 </p>
