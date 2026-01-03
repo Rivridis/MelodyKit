@@ -1385,13 +1385,26 @@ bool BackendHost::renderToWav(const std::vector<MidiNoteEvent>& notes,
 
     // Process each track separately, then mix
     for (const auto& [trackId, trackNotes] : notesByTrack) {
+        emit("DEBUG Processing track: " + trackId + " with " + juce::String(trackNotes.size()) + " notes");
+        
         auto trackIt = tracks.find(trackId);
-        if (trackIt == tracks.end()) {
+        
+        // Check if this is a sampler-only track (not in tracks map but has sampler sample)
+        bool isSamplerOnly = false;
+        std::shared_ptr<BeatSample> samplerSample = nullptr;
+        {
+            const juce::ScopedLock sl(samplerLock);
+            auto samplerIt = samplerSamples.find(trackId);
+            if (samplerIt != samplerSamples.end() && samplerIt->second) {
+                isSamplerOnly = true;
+                samplerSample = samplerIt->second;
+            }
+        }
+        
+        if (trackIt == tracks.end() && !isSamplerOnly) {
             emit("WARNING: Track " + trackId + " not found, skipping");
             continue;
         }
-
-        TrackState& track = trackIt->second;
 
         // Sort notes by start time for this track
         std::vector<const MidiNoteEvent*> sortedNotes = trackNotes;
@@ -1404,7 +1417,54 @@ bool BackendHost::renderToWav(const std::vector<MidiNoteEvent>& notes,
         juce::AudioBuffer<float> trackBuffer(numChannels, totalSamples);
         trackBuffer.clear();
 
-        if (track.plugin) {
+        // Handle sampler-only tracks first
+        if (isSamplerOnly && samplerSample) {
+            emit("INFO: Rendering sampler track " + trackId);
+            const int srcChannels = samplerSample->buffer.getNumChannels();
+            const int srcSamples = samplerSample->buffer.getNumSamples();
+            const double srcSampleRate = samplerSample->sampleRate;
+            const int rootNote = samplerSample->detectedRootNote;
+
+            // Render each note with pitch shifting
+            for (const auto* note : sortedNotes) {
+                const int startSample = juce::jlimit(0, totalSamples - 1, (int)(note->startTimeSeconds * sampleRate));
+                const int noteDurationSamples = juce::jmax(1, (int)(note->durationSeconds * sampleRate));
+                
+                // Calculate pitch shift ratio
+                const double semitoneShift = note->midiNote - rootNote;
+                const double pitchRatio = std::pow(2.0, semitoneShift / 12.0);
+                
+                // Apply sample rate conversion on top of pitch shift
+                const double effectiveRatio = (srcSampleRate / sampleRate) * pitchRatio;
+                
+                // Render this note
+                double srcPosition = 0.0;
+                for (int destSample = startSample; destSample < startSample + noteDurationSamples && destSample < totalSamples; ++destSample) {
+                    const int srcIdx = (int)srcPosition;
+                    if (srcIdx >= srcSamples - 1) break;
+                    
+                    const double frac = srcPosition - (double)srcIdx;
+                    
+                    // Linear interpolation for each channel
+                    for (int ch = 0; ch < numChannels; ++ch) {
+                        const int srcCh = (srcChannels == 1) ? 0 : juce::jmin(ch, srcChannels - 1);
+                        const float s0 = samplerSample->buffer.getSample(srcCh, srcIdx);
+                        const float s1 = samplerSample->buffer.getSample(srcCh, srcIdx + 1);
+                        const float interpolated = (float)((1.0 - frac) * s0 + frac * s1);
+                        
+                        // Apply velocity
+                        const float sample = interpolated * note->velocity01;
+                        trackBuffer.addSample(ch, destSample, sample);
+                    }
+                    
+                    srcPosition += effectiveRatio;
+                }
+            }
+        } else {
+            // Handle VST/SF2 tracks
+            TrackState& track = trackIt->second;
+
+            if (track.plugin) {
             auto* plugin = track.plugin.get();
 
             // Prepare plugin for rendering
@@ -1548,12 +1608,13 @@ bool BackendHost::renderToWav(const std::vector<MidiNoteEvent>& notes,
                 dispatchEventsUpTo(currentSample);
             }
         } else {
-            emit("WARNING: Track " + trackId + " has no plugin or SF2 loaded; skipping");
+            emit("WARNING: Track " + trackId + " has no plugin, SF2, or sampler sample loaded; skipping");
             continue;
         }
+        }
 
-        // Apply track gain to the rendered audio
-        const float trackGain = track.gainLinear;
+        // Apply track gain to the rendered audio (sampler-only tracks default to gain 1.0)
+        const float trackGain = isSamplerOnly ? 1.0f : trackIt->second.gainLinear;
         if (trackGain != 1.0f) {
             trackBuffer.applyGain(trackGain);
         }
