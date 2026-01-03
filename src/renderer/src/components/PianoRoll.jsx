@@ -67,7 +67,7 @@ function noteToFrequency(noteName) {
   return 440 * Math.pow(2, halfSteps / 12)
 }
 
-function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBack, gridWidth, setGridWidth, bpm, setBpm, selectedInstrument, onInstrumentChange, useVSTBackend = false, onVSTModeChange }) {
+function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesChange, onBack, gridWidth, setGridWidth, bpm, setBpm, selectedInstrument, onInstrumentChange, useVSTBackend = false, onVSTModeChange, samplerPath, onSamplerPathChange }) {
   const [isPlaying, setIsPlaying] = useState(false)
   // Keep an imperative ref in sync to avoid stale-closure in rAF playhead draws
   const isPlayingRef = useRef(false)
@@ -110,6 +110,9 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   const spessaInstrumentRef = useRef(null)
   // Keep VST backend mode in ref for immediate access without waiting for prop updates
   const useVSTBackendRef = useRef(useVSTBackend)
+  // Sampler state
+  const [loadedSampleName, setLoadedSampleName] = useState(null)
+  const [sampleLoading, setSampleLoading] = useState(false)
   const canvasRef = useRef(null)
   const timelineCanvasRef = useRef(null)
   const playheadCanvasRef = useRef(null)
@@ -220,6 +223,15 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       previewLimiterRef.current = null
     }
   }, [])
+
+  // Restore sampler sample name from path on mount
+  useEffect(() => {
+    if (trackType === 'sampler' && samplerPath) {
+      const fileName = samplerPath.split(/[\\/]/).pop() // Get filename from path
+      const truncatedName = fileName.length > 20 ? fileName.substring(0, 17) + '...' : fileName
+      setLoadedSampleName(truncatedName)
+    }
+  }, [trackType, samplerPath])
 
   useEffect(() => { notesRef.current = notes }, [notes])
 
@@ -1054,6 +1066,14 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Play a note using smplr instrument
   const playNote = (noteName, duration = 0.3) => {
+    // Route to sampler backend if this is a sampler track
+    if (trackType === 'sampler') {
+      const midiNote = noteNameToMidi(noteName)
+      const durationMs = Math.max(500, Math.floor(duration * 1000))
+      window.api.backend.triggerSampler(String(trackId), midiNote, 0.8, durationMs)
+      return
+    }
+    
     // Route to VST backend if enabled (use ref for immediate state)
     if (useVSTBackendRef.current) {
       const midiNote = noteNameToMidi(noteName)
@@ -1096,6 +1116,20 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     const now = ctx.currentTime
     const inSec = Math.max(0, whenSec - now)
     const sessionId = playbackSessionRef.current
+    
+    // Route to sampler backend if this is a sampler track
+    if (trackType === 'sampler') {
+      const id = setTimeout(() => {
+        if (playbackSessionRef.current === sessionId) {
+          const midiNote = noteNameToMidi(noteName)
+          const vel = velocity / 127.0 // normalize to 0..1
+          window.api.backend.triggerSampler(String(trackId), midiNote, vel, Math.floor((durationSec || 0.3) * 1000))
+        }
+        scheduledTimeoutsRef.current.delete(id)
+      }, Math.floor(inSec * 1000))
+      scheduledTimeoutsRef.current.add(id)
+      return
+    }
     
     // Route to backend if VST or SF2 is loaded (use ref for immediate state)
     if (useVSTBackendRef.current || spessaInstrumentRef.current) {
@@ -1802,6 +1836,38 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     }
   }
 
+  // Load a sample for sampler tracks
+  const handleLoadSample = async () => {
+    try {
+      setSampleLoading(true)
+      const res = await window.api.openSampleFile()
+      if (!res || !res.ok || res.canceled) {
+        setSampleLoading(false)
+        return
+      }
+      const { path: filePath, name } = res
+      const loadRes = await window.api.backend.loadSamplerSample(String(trackId), filePath)
+      if (!loadRes.ok) {
+        console.error('Failed to load sample:', loadRes.error)
+        alert('Failed to load sample: ' + (loadRes.error || 'Unknown error'))
+        setSampleLoading(false)
+        return
+      }
+      // Truncate long filenames
+      const truncatedName = name.length > 20 ? name.substring(0, 17) + '...' : name
+      setLoadedSampleName(truncatedName)
+      // Save the full file path for persistence
+      if (onSamplerPathChange) {
+        onSamplerPathChange(filePath)
+      }
+      setSampleLoading(false)
+    } catch (err) {
+      console.error('Failed to load sample:', err)
+      alert('Failed to load sample: ' + err.message)
+      setSampleLoading(false)
+    }
+  }
+
   // Toggle grid division between quarter, eighth, and sixteenth notes
   const cycleGridDivision = () => {
     setGridDivision(prev => {
@@ -1917,7 +1983,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
           </button>
         </div>
 
-        {/* Center section: Instrument selector */}
+        {/* Center section: Instrument/VST/Sample selector */}
         <div className="flex items-center gap-3">
           <button
             onClick={() => {
@@ -1933,42 +1999,58 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
           >
             {selectionMode ? 'Selecting…' : 'Select'}
           </button>
-          <button
-            onClick={() => { if (mode === 'edit' && !useVSTBackend) setShowInstrumentSelector(true) }}
-            disabled={mode !== 'edit' || useVSTBackend}
-            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' || useVSTBackend ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500'}`}
-            title={useVSTBackend ? 'Instrument disabled (VST loaded)' : (mode !== 'edit' ? 'Switch to Edit mode to change instrument' : 'Select Instrument')}
-          >
-            <span className="text-base">{selectedInstrument?.icon || '🎹'}</span>
-            <span className="text-sm font-medium">{selectedInstrument?.name || 'Select Instrument'}</span>
-            <span className="text-xs text-zinc-400">▼</span>
-          </button>
-          <button
-            onClick={() => { if (!vstButtonDisabled) setShowVSTSelector(true) }}
-            disabled={vstButtonDisabled}
-            className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${vstButtonDisabled ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (useVSTBackend ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500')}`}
-            title={vstButtonTitle}
-          >
-            <span className="text-base">🎛️</span>
-            <span className="text-sm font-medium">{useVSTBackend ? 'VST Loaded' : 'Load VST'}</span>
-          </button>
-          {useVSTBackend && (
+          {trackType === 'sampler' ? (
             <button
-              onClick={async () => {
-                if (mode === 'edit') {
-                  const success = await openVSTEditor(trackId)
-                  if (!success) {
-                    alert('Failed to open VST editor. Check console for details.')
-                  }
-                }
-              }}
-              disabled={mode !== 'edit'}
-              className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70'}`}
-              title={mode !== 'edit' ? 'Switch to Edit mode to edit VST' : 'Open VST Editor'}
+              onClick={handleLoadSample}
+              disabled={mode !== 'edit' || sampleLoading}
+              className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' || sampleLoading ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70'}`}
+              title={mode !== 'edit' ? 'Switch to Edit mode to load sample' : 'Load audio sample'}
             >
-              <span className="text-base">⚙️</span>
-              <span className="text-sm font-medium">Edit VST</span>
+              <span className="text-base">🎵</span>
+              <span className="text-sm font-medium">
+                {sampleLoading ? 'Loading...' : (loadedSampleName || 'Load Sample')}
+              </span>
             </button>
+          ) : (
+            <>
+              <button
+                onClick={() => { if (mode === 'edit' && !useVSTBackend) setShowInstrumentSelector(true) }}
+                disabled={mode !== 'edit' || useVSTBackend}
+                className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' || useVSTBackend ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500'}`}
+                title={useVSTBackend ? 'Instrument disabled (VST loaded)' : (mode !== 'edit' ? 'Switch to Edit mode to change instrument' : 'Select Instrument')}
+              >
+                <span className="text-base">{selectedInstrument?.icon || '🎹'}</span>
+                <span className="text-sm font-medium">{selectedInstrument?.name || 'Select Instrument'}</span>
+                <span className="text-xs text-zinc-400">▼</span>
+              </button>
+              <button
+                onClick={() => { if (!vstButtonDisabled) setShowVSTSelector(true) }}
+                disabled={vstButtonDisabled}
+                className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${vstButtonDisabled ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (useVSTBackend ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70' : 'bg-zinc-800/80 hover:bg-zinc-700 text-white border-zinc-600/50 hover:border-zinc-500')}`}
+                title={vstButtonTitle}
+              >
+                <span className="text-base">🎛️</span>
+                <span className="text-sm font-medium">{useVSTBackend ? 'VST Loaded' : 'Load VST'}</span>
+              </button>
+              {useVSTBackend && (
+                <button
+                  onClick={async () => {
+                    if (mode === 'edit') {
+                      const success = await openVSTEditor(trackId)
+                      if (!success) {
+                        alert('Failed to open VST editor. Check console for details.')
+                      }
+                    }
+                  }}
+                  disabled={mode !== 'edit'}
+                  className={`h-9 px-4 rounded-lg transition-all border flex items-center gap-2 shadow-sm ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70'}`}
+                  title={mode !== 'edit' ? 'Switch to Edit mode to edit VST' : 'Open VST Editor'}
+                >
+                  <span className="text-base">⚙️</span>
+                  <span className="text-sm font-medium">Edit VST</span>
+                </button>
+              )}
+            </>
           )}
           <button
             onClick={handleImportMidi}

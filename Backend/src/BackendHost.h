@@ -38,6 +38,7 @@ struct MidiNoteEvent {
 struct BeatSample {
     juce::AudioBuffer<float> buffer;
     double sampleRate = 44100.0;
+    int detectedRootNote = 60; // Detected MIDI note (C4 by default)
 };
 
 // Offline render event for beat sampler rows
@@ -115,11 +116,32 @@ public:
     void clearBeatTrack(const juce::String& trackId);
     void clearBeatRow(const juce::String& trackId, const juce::String& rowId);
 
+    // Sampler controls - loads a sample and maps it across the piano keyboard
+    bool loadSamplerSample(const juce::String& trackId,
+                          const juce::File& file,
+                          juce::String& errorMessage);
+    void triggerSamplerNote(const juce::String& trackId,
+                           int midiNote,
+                           float velocity,
+                           int durationMs);
+    void stopSamplerNote(const juce::String& trackId, int midiNote);
+    void clearSamplerTrack(const juce::String& trackId);
+
     // Beat voice used by the shared mixer callback
     struct BeatVoice {
         std::shared_ptr<BeatSample> sample;
         double position = 0.0; // position in source samples
         float gain = 1.0f;
+    };
+
+    // Sampler voice for polyphonic sample playback
+    struct SamplerVoice {
+        std::shared_ptr<BeatSample> sample;
+        double position = 0.0;
+        float gain = 1.0f;
+        int midiNote = 60; // The MIDI note being played
+        double playbackRate = 1.0; // Pitch shift based on note
+        bool active = true;
     };
 
     // Render MIDI notes to WAV file using realtime processing
@@ -177,4 +199,9 @@ private:
     std::map<juce::String, std::vector<BeatVoice>> beatVoices; // trackId -> active voices
     mutable juce::CriticalSection beatLock;
     std::unique_ptr<BeatAudioCallback> beatCallback;
+
+    std::map<juce::String, std::shared_ptr<BeatSample>> samplerSamples; // trackId -> loaded sample
+    std::map<juce::String, std::vector<SamplerVoice>> samplerVoices; // trackId -> active voices
+    mutable juce::CriticalSection samplerLock;
+    std::unique_ptr<juce::AudioIODeviceCallback> samplerCallback;
 };

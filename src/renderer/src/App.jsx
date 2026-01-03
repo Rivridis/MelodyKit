@@ -51,6 +51,7 @@ function App() {
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
   const [trackVSTPresets, setTrackVSTPresets] = useState({}) // { trackId: base64State } - VST plugin preset state
   const [trackVSTLoading, setTrackVSTLoading] = useState({}) // { trackId: boolean } - track VST is currently loading
+  const [trackSamplerPaths, setTrackSamplerPaths] = useState({}) // { trackId: filePath } - sampler track sample file paths
   const [trackMuted, setTrackMuted] = useState({}) // { trackId: boolean } - track mute status
   const [trackSoloed, setTrackSoloed] = useState({}) // { trackId: boolean } - track solo status
   const [trackAutomation, setTrackAutomation] = useState({}) // { trackId: { enabled: boolean, type: 'volume'|'pan'|'resonance'|'cutoff', data: { volume: [{beat, value}], pan: [...], resonance: [...], cutoff: [...] } } }
@@ -132,6 +133,24 @@ function App() {
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))
     // Do not auto-open sequencer; stay on current view
+  }
+
+  const handleAddSamplerTrack = () => {
+    const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
+    const id = Date.now()
+    const newTrack = {
+      id,
+      name: `Sampler ${tracks.length + 1}`,
+      color: color,
+      noteCount: 0,
+      type: 'sampler'
+    }
+    setTracks((prev) => [...prev, newTrack])
+    setTrackVolumes((prev) => ({ ...prev, [id]: 100 }))
+    setTrackNotes(prev => ({ ...prev, [id]: [] }))
+    setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
+    setTrackMuted(prev => ({ ...prev, [id]: false }))
+    setTrackSoloed(prev => ({ ...prev, [id]: false }))
   }
 
   // Import audio file(s) as new audio tracks
@@ -610,6 +629,9 @@ function App() {
         } : {}),
         ...(t.type === 'beat' && trackBeats[t.id] ? {
           beat: trackBeats[t.id]
+        } : {}),
+        ...(t.type === 'sampler' && trackSamplerPaths[t.id] ? {
+          samplerPath: trackSamplerPaths[t.id]
         } : {})
       })),
       trackNotes,
@@ -620,6 +642,7 @@ function App() {
       trackVSTMode,
       trackVSTPlugins,
       trackVSTPresets: capturedVSTPresets,
+      trackSamplerPaths,
       trackMuted,
       trackSoloed,
       trackAutomation
@@ -702,6 +725,7 @@ function App() {
       const nextTrackVSTMode = (p.trackVSTMode && typeof p.trackVSTMode === 'object') ? p.trackVSTMode : {}
       const nextTrackVSTPlugins = (p.trackVSTPlugins && typeof p.trackVSTPlugins === 'object') ? p.trackVSTPlugins : {}
       const nextTrackVSTPresets = (p.trackVSTPresets && typeof p.trackVSTPresets === 'object') ? p.trackVSTPresets : {}
+      const nextTrackSamplerPaths = (p.trackSamplerPaths && typeof p.trackSamplerPaths === 'object') ? p.trackSamplerPaths : {}
       const nextTrackMuted = (p.trackMuted && typeof p.trackMuted === 'object') ? p.trackMuted : {}
       const nextTrackSoloed = (p.trackSoloed && typeof p.trackSoloed === 'object') ? p.trackSoloed : {}
       const nextTrackAutomation = (p.trackAutomation && typeof p.trackAutomation === 'object') ? p.trackAutomation : {}
@@ -793,8 +817,26 @@ function App() {
       setTrackVSTMode(vstModeWithDefaults)
       setTrackVSTPlugins(nextTrackVSTPlugins)
       setTrackVSTPresets(nextTrackVSTPresets)
+      setTrackSamplerPaths(nextTrackSamplerPaths)
       setSelectedTrackId(null)
       setCurrentProjectPath(resp.path || null)
+      
+      // Restore sampler tracks - load samples in background
+      recomputedTracks.forEach(track => {
+        if (track.type === 'sampler' && nextTrackSamplerPaths[track.id]) {
+          const samplePath = nextTrackSamplerPaths[track.id]
+          console.log(`[Preload] Loading sampler sample for track ${track.id}: ${samplePath}`)
+          window.api.backend.loadSamplerSample(String(track.id), samplePath).then(res => {
+            if (res.ok) {
+              console.log(`[Preload] ✓ Sampler sample loaded for track ${track.id}`)
+            } else {
+              console.warn(`[Preload] ✗ Failed to load sampler sample for track ${track.id}:`, res.error)
+            }
+          }).catch(err => {
+            console.error(`[Preload] Error loading sampler sample for track ${track.id}:`, err)
+          })
+        }
+      })
       
       // PERFORMANCE: Pre-load SF2 instruments in parallel immediately after state restore
       // This prevents the 2-3 second delay when opening piano roll for the first time
@@ -1066,6 +1108,7 @@ function App() {
           onSelectTrack={setSelectedTrackId}
           onAddTrack={handleAddTrack}
           onAddBeatTrack={handleAddBeatTrack}
+          onAddSamplerTrack={handleAddSamplerTrack}
           onDeleteTrack={handleDeleteTrack}
           onRenameTrack={handleRenameTrack}
           onDuplicateTrack={handleDuplicateTrack}
@@ -1088,6 +1131,7 @@ function App() {
                 trackId={selectedTrack.id}
                 trackName={selectedTrack.name}
                 trackColor={selectedTrack.color}
+                trackType={selectedTrack.type}
                 notes={currentNotes}
                 onNotesChange={(notes) => handleNotesChange(selectedTrack.id, notes)}
                 onBack={() => { setSelectedTrackId(null); triggerImmediateSave(); }}
@@ -1101,6 +1145,10 @@ function App() {
                 onVSTModeChange={(enabled) => {
                   console.log(`VST mode changed for track ${selectedTrack.id}: ${enabled}`)
                   setTrackVSTMode({ ...trackVSTMode, [selectedTrack.id]: enabled })
+                }}
+                samplerPath={trackSamplerPaths[selectedTrack.id]}
+                onSamplerPathChange={(path) => {
+                  setTrackSamplerPaths({ ...trackSamplerPaths, [selectedTrack.id]: path })
                 }}
               />
             )

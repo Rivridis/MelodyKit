@@ -310,6 +310,48 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('backend:load-sampler-sample', async (event, { trackId, path: samplePath }) => {
+    try {
+      if (!trackId || !samplePath) {
+        return { ok: false, error: 'missing-track-or-path' }
+      }
+      const normalized = path.isAbsolute(samplePath) ? samplePath : path.join(process.cwd(), samplePath)
+      if (!fs.existsSync(normalized)) return { ok: false, error: 'file-not-found', path: normalized }
+      return sendToBackend(`LOAD_SAMPLER_SAMPLE ${trackId} "${normalized}"`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:trigger-sampler', async (event, { trackId, note, velocity = 0.8, durationMs = 0 }) => {
+    try {
+      if (!trackId || note === undefined) return { ok: false, error: 'missing-track-or-note' }
+      const vel = Math.max(0, Math.min(1, Number(velocity) || 0.8))
+      const dur = Math.max(0, Number(durationMs) || 0)
+      return sendToBackend(`TRIGGER_SAMPLER ${trackId} ${note} ${vel} ${dur}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:stop-sampler-note', async (event, { trackId, note }) => {
+    try {
+      if (!trackId || note === undefined) return { ok: false, error: 'missing-track-or-note' }
+      return sendToBackend(`STOP_SAMPLER_NOTE ${trackId} ${note}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:clear-sampler', async (event, { trackId }) => {
+    try {
+      if (!trackId) return { ok: false, error: 'missing-track-id' }
+      return sendToBackend(`CLEAR_SAMPLER ${trackId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('backend:panic', async (event, trackId = '') => {
     try {
       return sendToBackend(`PANIC ${trackId}`)
@@ -874,6 +916,31 @@ app.whenReady().then(() => {
       return { ok: true, files }
     } catch (error) {
       console.error('Error opening audio file(s):', error)
+      return { ok: false, error: String(error) }
+    }
+  })
+
+  // IPC handler to open a single audio file for sampler (returns path only, not bytes)
+  ipcMain.handle('audio:open-sample', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow()
+      const { canceled, filePaths } = await dialog.showOpenDialog(win || undefined, {
+        title: 'Load Sample',
+        filters: [
+          { name: 'Audio Files', extensions: ['wav', 'mp3', 'ogg', 'flac', 'm4a', 'aac', 'aif', 'aiff'] }
+        ],
+        properties: ['openFile']
+      })
+      if (canceled || !filePaths || filePaths.length === 0) {
+        return { ok: false, canceled: true }
+      }
+      const filePath = filePaths[0]
+      if (!fs.existsSync(filePath)) {
+        return { ok: false, error: 'file-not-found' }
+      }
+      return { ok: true, path: filePath, name: path.basename(filePath) }
+    } catch (error) {
+      console.error('Error opening sample file:', error)
       return { ok: false, error: String(error) }
     }
   })

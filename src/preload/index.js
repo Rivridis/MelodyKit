@@ -13,6 +13,7 @@ const api = {
   readAudioFile: (filePath) => ipcRenderer.invoke('audio:read', filePath),
   writeTempWav: (bytes, name) => ipcRenderer.invoke('audio:write-temp-wav', { bytes, name }),
   openAudioFiles: () => ipcRenderer.invoke('audio:open'),
+  openSampleFile: () => ipcRenderer.invoke('audio:open-sample'),
   sequencer: {
     listSounds: () => ipcRenderer.invoke('sequencer:listSounds')
   },
@@ -44,6 +45,11 @@ api.backend = {
   loadBeatSample: (trackId, rowId, path) => ipcRenderer.invoke('backend:load-beat-sample', { trackId, rowId, path }),
   triggerBeat: (trackId, rowId, gain) => ipcRenderer.invoke('backend:trigger-beat', { trackId, rowId, gain }),
   clearBeat: (trackId, rowId) => ipcRenderer.invoke('backend:clear-beat', { trackId, rowId }),
+  // sampler controls
+  loadSamplerSample: (trackId, path) => ipcRenderer.invoke('backend:load-sampler-sample', { trackId, path }),
+  triggerSampler: (trackId, note, velocity, durationMs) => ipcRenderer.invoke('backend:trigger-sampler', { trackId, note, velocity, durationMs }),
+  stopSamplerNote: (trackId, note) => ipcRenderer.invoke('backend:stop-sampler-note', { trackId, note }),
+  clearSampler: (trackId) => ipcRenderer.invoke('backend:clear-sampler', { trackId }),
   // optional helpers
   panic: (trackId) => ipcRenderer.invoke('backend:panic', trackId),
   status: () => ipcRenderer.invoke('backend:status'),

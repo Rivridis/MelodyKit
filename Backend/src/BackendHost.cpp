@@ -218,6 +218,95 @@ private:
     double currentRate = 44100.0;
 };
 
+// Sampler audio callback for polyphonic sample playback with pitch shifting
+class SamplerAudioCallback : public juce::AudioIODeviceCallback {
+public:
+    SamplerAudioCallback(
+        std::map<juce::String, std::shared_ptr<BeatSample>>& samples,
+        std::map<juce::String, std::vector<BackendHost::SamplerVoice>>& voices,
+        juce::CriticalSection& lock)
+        : sampleMap(samples), voiceMap(voices), mapLock(lock) {}
+
+    void audioDeviceIOCallbackWithContext(const float* const* /*inputChannelData*/,
+                                          int /*numInputChannels*/,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& /*context*/) override {
+        if (!outputChannelData || numSamples <= 0 || numOutputChannels <= 0) return;
+
+        // Clear output buffer
+        for (int ch = 0; ch < numOutputChannels; ++ch) {
+            if (outputChannelData[ch]) {
+                juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+            }
+        }
+
+        const juce::ScopedLock sl(mapLock);
+        juce::ignoreUnused(sampleMap);
+        if (voiceMap.empty()) return;
+
+        for (auto& [trackId, voices] : voiceMap) {
+            juce::ignoreUnused(trackId);
+            for (auto it = voices.begin(); it != voices.end();) {
+                auto& voice = *it;
+                auto samplePtr = voice.sample;
+                if (!samplePtr || samplePtr->buffer.getNumSamples() == 0 || !voice.active) {
+                    it = voices.erase(it);
+                    continue;
+                }
+
+                const int sourceSamples = samplePtr->buffer.getNumSamples();
+                const int sourceChannels = samplePtr->buffer.getNumChannels();
+                const double baseRatio = (currentRate > 0.0) ? (samplePtr->sampleRate / currentRate) : 1.0;
+                const double pitchRatio = voice.playbackRate * baseRatio;
+
+                double pos = voice.position;
+                bool finished = false;
+
+                for (int i = 0; i < numSamples; ++i) {
+                    const int idx = static_cast<int>(pos);
+                    if (idx >= sourceSamples) { finished = true; break; }
+
+                    const double frac = pos - static_cast<double>(idx);
+
+                    for (int ch = 0; ch < numOutputChannels; ++ch) {
+                        if (!outputChannelData[ch]) continue;
+                        const int srcCh = (sourceChannels == 1) ? 0 : juce::jmin(ch, sourceChannels - 1);
+                        const float s0 = samplePtr->buffer.getSample(srcCh, idx);
+                        const float s1 = (idx + 1 < sourceSamples) ? samplePtr->buffer.getSample(srcCh, idx + 1) : 0.0f;
+                        const float blended = static_cast<float>((1.0 - frac) * s0 + frac * s1);
+                        outputChannelData[ch][i] += blended * voice.gain;
+                    }
+
+                    pos += pitchRatio;
+                }
+
+                voice.position = pos;
+                if (finished || pos >= sourceSamples) {
+                    it = voices.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
+
+    void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
+        currentRate = device ? device->getCurrentSampleRate() : 44100.0;
+    }
+
+    void audioDeviceStopped() override {
+        currentRate = 44100.0;
+    }
+
+private:
+    std::map<juce::String, std::shared_ptr<BeatSample>>& sampleMap;
+    std::map<juce::String, std::vector<BackendHost::SamplerVoice>>& voiceMap;
+    juce::CriticalSection& mapLock;
+    double currentRate = 44100.0;
+};
+
 // Simple window to host the plugin's editor
 class PluginEditorWindow : public juce::DocumentWindow {
 public:
@@ -269,9 +358,17 @@ BackendHost::BackendHost() {
     // Shared beat mixer callback (handles all beat tracks)
     beatCallback = std::make_unique<BeatAudioCallback>(beatSamples, beatVoices, beatLock);
     deviceManager.addAudioCallback(beatCallback.get());
+
+    // Shared sampler callback (handles all sampler tracks)
+    samplerCallback = std::make_unique<SamplerAudioCallback>(samplerSamples, samplerVoices, samplerLock);
+    deviceManager.addAudioCallback(samplerCallback.get());
 }
 
 BackendHost::~BackendHost() {
+    if (samplerCallback) {
+        deviceManager.removeAudioCallback(samplerCallback.get());
+        samplerCallback.reset();
+    }
     if (beatCallback) {
         deviceManager.removeAudioCallback(beatCallback.get());
         beatCallback.reset();
@@ -591,6 +688,202 @@ void BackendHost::clearBeatRow(const juce::String& trackId, const juce::String& 
         auto& v = voiceIt->second;
         v.erase(std::remove_if(v.begin(), v.end(), [&](const BeatVoice& bv) { return bv.sample && trackIt != beatSamples.end() && (!trackIt->second.count(rowId) || trackIt->second.at(rowId) != bv.sample); }), v.end());
     }
+}
+
+// Simple autocorrelation-based pitch detection
+static int detectPitch(const juce::AudioBuffer<float>& buffer, double sampleRate) {
+    if (buffer.getNumSamples() < 1024 || buffer.getNumChannels() < 1) {
+        return 60; // Default to C4
+    }
+
+    // Mix to mono if stereo
+    std::vector<float> mono;
+    const int numSamples = juce::jmin(buffer.getNumSamples(), 88200); // Max 2 seconds
+    mono.resize(numSamples);
+    
+    const int numChannels = buffer.getNumChannels();
+    for (int i = 0; i < numSamples; ++i) {
+        float sum = 0.0f;
+        for (int ch = 0; ch < numChannels; ++ch) {
+            sum += buffer.getSample(ch, i);
+        }
+        mono[i] = sum / static_cast<float>(numChannels);
+    }
+
+    // Find section with highest energy (avoid silence at start/end)
+    int bestStart = 0;
+    float maxEnergy = 0.0f;
+    const int windowSize = 8192; // Larger window for better low-frequency detection
+    for (int start = 0; start < numSamples - windowSize; start += windowSize / 4) {
+        float energy = 0.0f;
+        for (int i = 0; i < windowSize && (start + i) < numSamples; ++i) {
+            float s = mono[start + i];
+            energy += s * s;
+        }
+        if (energy > maxEnergy) {
+            maxEnergy = energy;
+            bestStart = start;
+        }
+    }
+
+    if (maxEnergy < 0.0001f) {
+        return 60; // Too quiet, default to C4
+    }
+
+    // Autocorrelation on best window
+    const int analyzeSize = juce::jmin(windowSize, numSamples - bestStart);
+    const int minLag = static_cast<int>(sampleRate / 2000.0); // ~2000 Hz max (above piano range)
+    const int maxLag = static_cast<int>(sampleRate / 27.5);   // ~27.5 Hz min (A0 - lowest piano note)
+    
+    std::vector<float> acf(maxLag - minLag + 1);
+    
+    // Calculate autocorrelation function
+    for (int lag = minLag; lag <= maxLag && lag < analyzeSize / 2; ++lag) {
+        float corr = 0.0f;
+        float norm1 = 0.0f;
+        float norm2 = 0.0f;
+        for (int i = 0; i < analyzeSize - lag; ++i) {
+            float s1 = mono[bestStart + i];
+            float s2 = mono[bestStart + i + lag];
+            corr += s1 * s2;
+            norm1 += s1 * s1;
+            norm2 += s2 * s2;
+        }
+        float normFactor = std::sqrt(norm1 * norm2);
+        if (normFactor > 0.0f) {
+            acf[lag - minLag] = corr / normFactor;
+        }
+    }
+
+    // Find peaks in autocorrelation
+    std::vector<std::pair<int, float>> peaks; // lag, correlation
+    for (int i = 1; i < static_cast<int>(acf.size()) - 1; ++i) {
+        if (acf[i] > acf[i - 1] && acf[i] > acf[i + 1] && acf[i] > 0.3f) {
+            peaks.push_back({minLag + i, acf[i]});
+        }
+    }
+
+    if (peaks.empty()) {
+        return 60; // No clear pitch detected
+    }
+
+    // Sort by correlation strength
+    std::sort(peaks.begin(), peaks.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+
+    // Use the first strong peak (prefer lower frequencies/longer periods)
+    // This helps avoid detecting harmonics
+    int bestLag = peaks[0].first;
+    
+    // Check if there's a peak at roughly double the period (octave lower)
+    // that's also strong - prefer that one
+    for (const auto& peak : peaks) {
+        if (peak.first > bestLag * 1.8 && peak.first < bestLag * 2.2 && peak.second > 0.5f) {
+            bestLag = peak.first; // Use the lower octave
+            break;
+        }
+    }
+
+    // Convert lag to frequency to MIDI note
+    const double frequency = sampleRate / static_cast<double>(bestLag);
+    double midiNote = 69.0 + 12.0 * std::log2(frequency / 440.0); // A4 = 440 Hz = MIDI 69
+    
+    // Round to nearest semitone
+    int roundedNote = static_cast<int>(std::round(midiNote));
+    roundedNote = juce::jlimit(21, 108, roundedNote); // Piano range A0 to C8
+    
+    return roundedNote;
+}
+
+bool BackendHost::loadSamplerSample(const juce::String& trackId,
+                                   const juce::File& file,
+                                   juce::String& errorMessage) {
+    if (trackId.isEmpty()) {
+        errorMessage = "missing-track-id";
+        return false;
+    }
+
+    if (!file.existsAsFile()) {
+        errorMessage = "file-not-found: " + file.getFullPathName();
+        return false;
+    }
+
+    std::unique_ptr<juce::AudioFormatReader> reader(beatFormatManager.createReaderFor(file));
+    if (!reader) {
+        errorMessage = "unsupported-format";
+        return false;
+    }
+
+    const int numSamples = static_cast<int>(reader->lengthInSamples);
+    auto sample = std::make_shared<BeatSample>();
+    sample->sampleRate = reader->sampleRate;
+    sample->buffer.setSize(static_cast<int>(reader->numChannels), juce::jmax(1, numSamples));
+    reader->read(&sample->buffer, 0, numSamples, 0, true, true);
+
+    // Detect pitch
+    sample->detectedRootNote = detectPitch(sample->buffer, sample->sampleRate);
+
+    {
+        const juce::ScopedLock sl(samplerLock);
+        samplerSamples[trackId] = sample;
+        samplerVoices.erase(trackId); // Clear any playing voices
+    }
+
+    emit("EVENT SAMPLER_LOADED " + trackId + " " + file.getFileName() + " root=" + juce::String(sample->detectedRootNote));
+    return true;
+}
+
+void BackendHost::triggerSamplerNote(const juce::String& trackId,
+                                    int midiNote,
+                                    float velocity,
+                                    int durationMs) {
+    const juce::ScopedLock sl(samplerLock);
+    auto sampleIt = samplerSamples.find(trackId);
+    if (sampleIt == samplerSamples.end()) return;
+    auto sample = sampleIt->second;
+    if (!sample || sample->buffer.getNumSamples() <= 0) return;
+
+    // Calculate pitch shift based on MIDI note relative to detected root note
+    const int rootNote = sample->detectedRootNote; // Use detected pitch as root
+    const int noteOffset = midiNote - rootNote;
+    const double semitone = std::pow(2.0, noteOffset / 12.0); // Equal temperament tuning
+
+    SamplerVoice voice;
+    voice.sample = sample;
+    voice.position = 0.0;
+    voice.gain = juce::jlimit(0.0f, 1.0f, velocity);
+    voice.midiNote = midiNote;
+    voice.playbackRate = semitone;
+    voice.active = true;
+    
+    samplerVoices[trackId].push_back(voice);
+
+    // Schedule note off if duration is specified
+    if (durationMs > 0) {
+        juce::Timer::callAfterDelay(durationMs, [this, trackId, midiNote]() {
+            stopSamplerNote(trackId, midiNote);
+        });
+    }
+}
+
+void BackendHost::stopSamplerNote(const juce::String& trackId, int midiNote) {
+    const juce::ScopedLock sl(samplerLock);
+    auto voiceIt = samplerVoices.find(trackId);
+    if (voiceIt == samplerVoices.end()) return;
+    
+    // Mark voices with matching note as inactive (will be removed in audio callback)
+    for (auto& voice : voiceIt->second) {
+        if (voice.midiNote == midiNote) {
+            voice.active = false;
+        }
+    }
+}
+
+void BackendHost::clearSamplerTrack(const juce::String& trackId) {
+    const juce::ScopedLock sl(samplerLock);
+    samplerSamples.erase(trackId);
+    samplerVoices.erase(trackId);
 }
 
 bool BackendHost::isPluginLoaded(const juce::String& trackId) const {

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react'
 import { stopAllNotes } from '../utils/soundfontPlayer'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
-import { playBackendNote, noteNameToMidi, loadSF2 } from '@renderer/utils/vstBackend'
+import { playBackendNote, noteNameToMidi, loadSF2, playSamplerNote, stopSamplerNote } from '@renderer/utils/vstBackend'
 import { encodeToWav } from '@renderer/utils/fastWav'
 import AutomationLane from './AutomationLane'
 
@@ -95,6 +95,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const loopEndRef = useRef(loopEnd)
   const bpmRef = useRef(bpm)
   const trackAutomationRef = useRef(trackAutomation)
+  const tracksRef = useRef(tracks) // Store tracks array to access current track types
   const loadedInstrumentsRef = useRef({}) // Store loaded instruments by track ID
   const loadedAudioClipsRef = useRef({}) // Store decoded AudioBuffer by track ID for audio tracks
   const beatSamplePathsRef = useRef({}) // { [trackId]: { [rowId]: filePath } }
@@ -304,6 +305,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   useEffect(() => { trackNotesRef.current = trackNotes }, [trackNotes])
   useEffect(() => { trackInstrumentsRef.current = trackInstruments }, [trackInstruments])
+  useEffect(() => { tracksRef.current = tracks }, [tracks])
   useEffect(() => { trackMutedRef.current = trackMuted }, [trackMuted])
   useEffect(() => { trackSoloedRef.current = trackSoloed }, [trackSoloed])
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
@@ -1059,6 +1061,24 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (trackVSTLoading && trackVSTLoading[trackId]) {
       console.log(`Track ${trackId} VST still loading, skipping note playback`)
       return
+    }
+    
+    // Find track to check type (use ref to avoid stale closure)
+    // Use == instead of === to handle string/number mismatch
+    const track = tracksRef.current?.find(t => t.id == trackId)
+    
+    // Handle sampler tracks
+    if (track && track.type === 'sampler') {
+      try {
+        console.log(`Using sampler backend for track ${trackId}`)
+        const midiNote = noteNameToMidi(noteName)
+        const velocity = 0.8
+        playSamplerNote(trackId, midiNote, velocity, Math.floor(duration * 1000))
+        return
+      } catch (error) {
+        console.error('Error playing sampler note:', error)
+        return
+      }
     }
     
     const loadedInstrument = loadedInstrumentsRef.current[trackId]

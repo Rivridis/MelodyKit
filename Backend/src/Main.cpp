@@ -157,6 +157,82 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         return true;
     }
 
+    if (command == "LOAD_SAMPLER_SAMPLE") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.size() < 2) {
+            emit("ERROR LOAD_SAMPLER_SAMPLE missing-args (trackId path)");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        const juce::String path = tokens[1];
+        juce::String err;
+        if (!ctx.host.loadSamplerSample(trackId, juce::File(path.unquoted()), err)) {
+            emit("ERROR LOAD_SAMPLER_SAMPLE " + trackId + " " + err);
+        } else {
+            emit("EVENT SAMPLER_READY " + trackId);
+        }
+        return true;
+    }
+
+    if (command == "TRIGGER_SAMPLER") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.size() < 2) {
+            emit("ERROR TRIGGER_SAMPLER missing-args (trackId midiNote [velocity] [durationMs])");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        const int midiNote = tokens[1].getIntValue();
+        float velocity = tokens.size() > 2 ? tokens[2].getFloatValue() : 0.8f;
+        const int durationMs = tokens.size() > 3 ? tokens[3].getIntValue() : 0; // 0 = infinite
+
+        // Accept velocity in 0..1 or 0..127 range
+        if (velocity > 1.5f) velocity = juce::jlimit(0.0f, 1.0f, velocity / 127.0f);
+
+        ctx.host.triggerSamplerNote(trackId, midiNote, velocity, durationMs);
+        emit("EVENT SAMPLER_NOTE " + trackId + " " + juce::String(midiNote));
+        return true;
+    }
+
+    if (command == "STOP_SAMPLER_NOTE") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.size() < 2) {
+            emit("ERROR STOP_SAMPLER_NOTE missing-args (trackId midiNote)");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        const int midiNote = tokens[1].getIntValue();
+        ctx.host.stopSamplerNote(trackId, midiNote);
+        return true;
+    }
+
+    if (command == "CLEAR_SAMPLER") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+
+        if (tokens.isEmpty()) {
+            emit("ERROR CLEAR_SAMPLER missing-track-id");
+            return true;
+        }
+
+        const juce::String trackId = tokens[0];
+        ctx.host.clearSamplerTrack(trackId);
+        emit("EVENT SAMPLER_CLEARED " + trackId);
+        return true;
+    }
+
     if (command == "NOTE" || command == "NOTE_ON") {
         juce::StringArray tokens;
         tokens.addTokens(args, " ", "\"'");

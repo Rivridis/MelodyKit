@@ -180,6 +180,66 @@ export function noteNameToMidi(noteName) {
   return (octave + 1) * 12 + noteMap[note]
 }
 
+// Load a sample into the sampler for a specific track
+export async function loadSamplerSample(trackId, filePath) {
+  try {
+    const res = await window.api.backend.loadSamplerSample(String(trackId), filePath)
+    if (!res.ok) {
+      console.error(`Failed to load sampler sample for track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error loading sampler sample for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Trigger a sampler note with pitch shifting
+export async function playSamplerNote(trackId, midiNote, velocity = 0.8, durationMs = 0) {
+  try {
+    const res = await window.api.backend.triggerSampler(String(trackId), midiNote, velocity, durationMs)
+    if (!res.ok) {
+      console.error(`Failed to trigger sampler note for track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error triggering sampler note for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Stop a specific note in the sampler
+export async function stopSamplerNote(trackId, midiNote) {
+  try {
+    const res = await window.api.backend.stopSamplerNote(String(trackId), midiNote)
+    if (!res.ok) {
+      console.error(`Failed to stop sampler note for track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error stopping sampler note for track ${trackId}:`, e)
+    return false
+  }
+}
+
+// Clear all samples and voices for a sampler track
+export async function clearSamplerTrack(trackId) {
+  try {
+    const res = await window.api.backend.clearSampler(String(trackId))
+    if (!res.ok) {
+      console.error(`Failed to clear sampler track ${trackId}:`, res.error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error(`Error clearing sampler track ${trackId}:`, e)
+    return false
+  }
+}
+
 // Cleanup
 export function cleanupBackend() {
   if (backendEventUnsubscribe) {

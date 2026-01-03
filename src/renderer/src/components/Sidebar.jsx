@@ -5,7 +5,7 @@ const TRACK_COLORS = [
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 ]
 
-function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onDeleteTrack, onRenameTrack, onDuplicateTrack, isRestoring, trackAutomation, onAutomationChange }) {
+function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeatTrack, onAddSamplerTrack, onDeleteTrack, onRenameTrack, onDuplicateTrack, isRestoring, trackAutomation, onAutomationChange }) {
   const [editingTrackId, setEditingTrackId] = useState(null)
   const [editName, setEditName] = useState('')
   const [openMenuTrackId, setOpenMenuTrackId] = useState(null)
@@ -17,6 +17,9 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
   }
   const handleAddBeat = () => {
     onAddBeatTrack?.()
+  }
+  const handleAddSampler = () => {
+    onAddSamplerTrack?.()
   }
 
   const handleDoubleClick = (track) => {
@@ -143,6 +146,29 @@ function Sidebar({ tracks, selectedTrackId, onSelectTrack, onAddTrack, onAddBeat
             </svg>
           </span>
           <span className="text-center leading-none">Add Beat</span>
+        </button>
+        <button
+          onClick={handleAddSampler}
+          disabled={isRestoring}
+          title="Add Sampler Track"
+          aria-label="Add Sampler Track"
+          className="mt-2 relative inline-flex items-center justify-center h-9 w-full px-10 rounded-md text-sm font-medium text-white
+                     bg-zinc-800 hover:bg-zinc-700 ring-1 ring-inset ring-zinc-700
+                     shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors
+                     disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-zinc-800"
+        >
+          <span
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2
+                       inline-flex items-center justify-center w-5 h-5 rounded-full
+                       bg-zinc-700 ring-1 ring-inset ring-zinc-600 text-zinc-200"
+            aria-hidden="true"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M11 5h2v14h-2z"></path>
+              <path d="M5 11h14v2H5z"></path>
+            </svg>
+          </span>
+          <span className="text-center leading-none">Add Sampler</span>
         </button>
       </div>
 
