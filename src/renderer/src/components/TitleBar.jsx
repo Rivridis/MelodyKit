@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import Metronome from './Metronome'
 
-function TitleBar({ onNewProject, onLoadProject, onSaveAsProject, onExportWav, onImportAudio, currentProjectPath, loading, isAutosaving, bpm }) {
+function TitleBar({ onNewProject, onLoadProject, onSaveAsProject, onExportWav, onImportAudio, currentProjectPath, loading, loadingMessage, isAutosaving, bpm }) {
   const [metronomeOn, setMetronomeOn] = useState(false)
   const [fileOpen, setFileOpen] = useState(false)
   const menuRef = useRef(null)
@@ -66,7 +66,7 @@ function TitleBar({ onNewProject, onLoadProject, onSaveAsProject, onExportWav, o
           <span className="text-zinc-100 font-semibold text-sm">MelodyKit</span>
           <span className="mx-2 text-zinc-600">•</span>
           {loading ? (
-            <span className="text-amber-300 text-sm">Loading…</span>
+            <span className="text-amber-300 text-sm">{loadingMessage || 'Loading…'}</span>
           ) : (
             <span className="text-zinc-400 text-sm truncate max-w-[20rem]" title={currentProjectPath || 'Unsaved project'}>
               {currentProjectPath ? currentProjectPath.split('\\').pop() : 'Untitled'}

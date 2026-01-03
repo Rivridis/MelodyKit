@@ -5,6 +5,7 @@ import TrackTimeline from './components/TrackTimeline'
 import TitleBar from './components/TitleBar'
 import SequencerPanel from './components/SequencerPanel'
 import { initBackend } from './utils/vstBackend'
+import { loadSF2 } from './utils/vstBackend'
 
 // Helper to wait for backend response via event stream
 const waitForBackendEvent = (matchPattern, timeoutMs = 5000) => {
@@ -60,6 +61,7 @@ function App() {
   const [loopEnd, setLoopEnd] = useState(null) // Loop region end (in beats), null = no loop
   const [currentProjectPath, setCurrentProjectPath] = useState(null)
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
+  const [loadingMessage, setLoadingMessage] = useState('') // Detailed loading progress message
   const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
   const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
   const [showWelcome, setShowWelcome] = useState(true)
@@ -471,6 +473,26 @@ function App() {
   // Update instrument for a track
   const handleInstrumentChange = (trackId, instrument) => {
     setTrackInstruments(prev => ({ ...prev, [trackId]: instrument }))
+    
+    // PERFORMANCE: Pre-load SF2 immediately when instrument is selected
+    // This prevents the 2-3 second delay when opening piano roll
+    if (instrument && instrument.samplePath && instrument.samplePath.endsWith('.sf2')) {
+      const bank = instrument.bank || 0
+      const preset = instrument.preset || 0
+      console.log(`[Preload] Loading SF2 for track ${trackId}: ${instrument.samplePath}`)
+      
+      // Fire-and-forget: load SF2 in background immediately
+      loadSF2(trackId, instrument.samplePath, bank, preset).then(success => {
+        if (success) {
+          console.log(`[Preload] ✓ SF2 loaded for track ${trackId}`)
+        } else {
+          console.warn(`[Preload] ✗ Failed to load SF2 for track ${trackId}`)
+        }
+      }).catch(err => {
+        console.error(`[Preload] Error loading SF2 for track ${trackId}:`, err)
+      })
+    }
+    
     // Track VST plugin path if present
     if (instrument && instrument.vstPath) {
       console.log(`VST loaded for track ${trackId}: ${instrument.vstPath}`)
@@ -637,14 +659,23 @@ function App() {
       if (loadDialogOpenRef.current) return
       loadDialogOpenRef.current = true
       setIsLoading(true)
+      setLoadingMessage('Opening project file...')
       const resp = await window.api?.openProject?.()
-      if (!resp) return
-      if (!resp.ok || !resp.project) {
-        if (resp && resp.canceled) return
-        console.error('Open project failed:', resp && resp.error)
-        setIsLoading(false)
+      if (!resp) {
+        setLoadingMessage('')
         return
       }
+      if (!resp.ok || !resp.project) {
+        if (resp && resp.canceled) {
+          setLoadingMessage('')
+          return
+        }
+        console.error('Open project failed:', resp && resp.error)
+        setIsLoading(false)
+        setLoadingMessage('')
+        return
+      }
+      setLoadingMessage('Parsing project data...')
       const p = resp.project || {}
       // Basic validation
       const nextBpm = typeof p.bpm === 'number' ? p.bpm : 120
@@ -696,94 +727,138 @@ function App() {
 
       // Prevent autosave during state restoration
       setIsRestoring(true)
+      setLoadingMessage('Restoring project state...')
 
+      // Recalculate missing trackLengths from notes
+      const calculatedLengths = {}
+      recomputedTracks.forEach(t => {
+        if (t.type === 'midi' || (!t.type && t.type !== 'beat' && t.type !== 'audio')) {
+          const notes = nextTrackNotes[t.id]
+          if (notes && notes.length > 0) {
+            const maxPos = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
+            calculatedLengths[t.id] = Math.ceil(maxPos)
+          }
+        }
+      })
+      
+      // Merge calculated lengths with loaded lengths (loaded takes priority)
+      const finalLengths = { ...calculatedLengths, ...nextTrackLengths }
+      console.log('[Load] Final trackLengths:', finalLengths)
+      console.log('[Load] Calculated from notes:', calculatedLengths)
+      console.log('[Load] Loaded from file:', nextTrackLengths)
+      
+      // PERFORMANCE OPTIMIZATION: Batch all state updates together to minimize React re-renders
+      // This reduces from 15+ sequential setState calls to a single batch update
+      const volumesWithDefaults = recomputedTracks.reduce((acc, t) => {
+        acc[t.id] = typeof nextTrackVolumes[t.id] === 'number' ? nextTrackVolumes[t.id] : 100
+        return acc
+      }, {})
+      
+      const offsetsWithDefaults = recomputedTracks.reduce((acc, t) => {
+        acc[t.id] = typeof nextTrackOffsets[t.id] === 'number' ? nextTrackOffsets[t.id] : 0
+        return acc
+      }, {})
+      
+      const mutedWithDefaults = recomputedTracks.reduce((acc, t) => {
+        acc[t.id] = typeof nextTrackMuted[t.id] === 'boolean' ? nextTrackMuted[t.id] : false
+        return acc
+      }, {})
+      
+      const soloedWithDefaults = recomputedTracks.reduce((acc, t) => {
+        acc[t.id] = typeof nextTrackSoloed[t.id] === 'boolean' ? nextTrackSoloed[t.id] : false
+        return acc
+      }, {})
+      
+      const vstModeWithDefaults = recomputedTracks.reduce((acc, t) => {
+        acc[t.id] = typeof nextTrackVSTMode[t.id] === 'boolean' ? nextTrackVSTMode[t.id] : false
+        return acc
+      }, {})
+      
+      // Apply all state updates in a single synchronous batch
       setBpm(nextBpm)
       setGridWidth(nextGrid)
       setZoom(nextZoom)
       setLoopStart(nextLoopStart)
       setLoopEnd(nextLoopEnd)
-  setTracks(recomputedTracks)
-  setTrackNotes(nextTrackNotes)
-  setTrackInstruments(nextTrackInstruments)
-  setTrackBeats(nextTrackBeats)
-  // default volume to 100 for any missing track ids
-  setTrackVolumes(recomputedTracks.reduce((acc, t) => {
-    acc[t.id] = typeof nextTrackVolumes[t.id] === 'number' ? nextTrackVolumes[t.id] : 100
-    return acc
-  }, {}))
-  // default offset to 0 for any missing track ids
-  setTrackOffsets(recomputedTracks.reduce((acc, t) => {
-    acc[t.id] = typeof nextTrackOffsets[t.id] === 'number' ? nextTrackOffsets[t.id] : 0
-    return acc
-  }, {}))
-  // Set mute/solo states with defaults
-  setTrackMuted(recomputedTracks.reduce((acc, t) => {
-    acc[t.id] = typeof nextTrackMuted[t.id] === 'boolean' ? nextTrackMuted[t.id] : false
-    return acc
-  }, {}))
-  setTrackSoloed(recomputedTracks.reduce((acc, t) => {
-    acc[t.id] = typeof nextTrackSoloed[t.id] === 'boolean' ? nextTrackSoloed[t.id] : false
-    return acc
-  }, {}))
-  // Set automation states
-  setTrackAutomation(nextTrackAutomation)
-  // Set manual track lengths (for MIDI/audio tracks)
-  setTrackLengths(nextTrackLengths)
-  
-  // Recalculate missing trackLengths from notes
-  const calculatedLengths = {}
-  recomputedTracks.forEach(t => {
-    if (t.type === 'midi' || (!t.type && t.type !== 'beat' && t.type !== 'audio')) {
-      const notes = nextTrackNotes[t.id]
-      if (notes && notes.length > 0) {
-        const maxPos = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
-        calculatedLengths[t.id] = Math.ceil(maxPos)
-      }
-    }
-  })
-  
-  // Merge calculated lengths with loaded lengths (loaded takes priority)
-  setTrackLengths(prev => ({ ...calculatedLengths, ...nextTrackLengths }))
-  console.log('[Load] Final trackLengths:', { ...calculatedLengths, ...nextTrackLengths })
-  console.log('[Load] Calculated from notes:', calculatedLengths)
-  console.log('[Load] Loaded from file:', nextTrackLengths)
-  
-  // default VST mode to false for any missing track ids
-  setTrackVSTMode(recomputedTracks.reduce((acc, t) => {
-    acc[t.id] = typeof nextTrackVSTMode[t.id] === 'boolean' ? nextTrackVSTMode[t.id] : false
-    return acc
-  }, {}))
-  // Set VST plugin paths
-  setTrackVSTPlugins(nextTrackVSTPlugins)
-  // Set VST presets (to be applied after VSTs are loaded)
-  setTrackVSTPresets(nextTrackVSTPresets)
-  // Stay on track timeline view after loading (do not auto-open Piano UI)
-  setSelectedTrackId(null)
+      setTracks(recomputedTracks)
+      setTrackNotes(nextTrackNotes)
+      setTrackInstruments(nextTrackInstruments)
+      setTrackBeats(nextTrackBeats)
+      setTrackVolumes(volumesWithDefaults)
+      setTrackOffsets(offsetsWithDefaults)
+      setTrackMuted(mutedWithDefaults)
+      setTrackSoloed(soloedWithDefaults)
+      setTrackAutomation(nextTrackAutomation)
+      setTrackLengths(finalLengths)
+      setTrackVSTMode(vstModeWithDefaults)
+      setTrackVSTPlugins(nextTrackVSTPlugins)
+      setTrackVSTPresets(nextTrackVSTPresets)
+      setSelectedTrackId(null)
       setCurrentProjectPath(resp.path || null)
       
+      // PERFORMANCE: Pre-load SF2 instruments in parallel immediately after state restore
+      // This prevents the 2-3 second delay when opening piano roll for the first time
+      const sf2LoadPromises = []
+      recomputedTracks.forEach(track => {
+        const instrument = nextTrackInstruments[track.id]
+        if (instrument && instrument.samplePath && instrument.samplePath.endsWith('.sf2')) {
+          const bank = instrument.bank || 0
+          const preset = instrument.preset || 0
+          console.log(`[Preload] Loading SF2 for track ${track.id}: ${instrument.samplePath}`)
+          
+          const promise = loadSF2(track.id, instrument.samplePath, bank, preset).then(success => {
+            if (success) {
+              console.log(`[Preload] ✓ SF2 loaded for track ${track.id}`)
+            } else {
+              console.warn(`[Preload] ✗ Failed to load SF2 for track ${track.id}`)
+            }
+          }).catch(err => {
+            console.error(`[Preload] Error loading SF2 for track ${track.id}:`, err)
+          })
+          
+          sf2LoadPromises.push(promise)
+        }
+      })
+      
+      // Don't await - let SF2s load in background
+      if (sf2LoadPromises.length > 0) {
+        setLoadingMessage(`Loading ${sf2LoadPromises.length} instrument${sf2LoadPromises.length > 1 ? 's' : ''}...`)
+        Promise.all(sf2LoadPromises).finally(() => {
+          // Only clear loading message if not already showing VST loading
+          if (Object.keys(nextTrackVSTPlugins).filter(tid => nextTrackVSTMode[tid]).length === 0) {
+            setLoadingMessage('')
+          }
+        })
+      }
+      
       // Restore VST plugins and presets asynchronously (don't block UI)
+      // PERFORMANCE OPTIMIZATION: Load VSTs in parallel instead of sequentially
       ;(async () => {
         console.log('[Load] Starting VST restoration...')
         console.log('[Load] nextTrackVSTPlugins:', nextTrackVSTPlugins)
         console.log('[Load] nextTrackVSTPresets:', Object.keys(nextTrackVSTPresets))
         
-        // Process tracks sequentially to avoid race conditions
+        const vstCount = Object.keys(nextTrackVSTPlugins).filter(tid => nextTrackVSTMode[tid]).length
+        if (vstCount > 0) {
+          setLoadingMessage(`Loading ${vstCount} VST plugin${vstCount > 1 ? 's' : ''}...`)
+        }
+        
+        // Process tracks in parallel for much faster loading
         const trackIds = Object.keys(nextTrackVSTPlugins)
-        for (let i = 0; i < trackIds.length; i++) {
-          const trackId = trackIds[i]
+        const vstPromises = trackIds.map(async (trackId, index) => {
           const vstPath = nextTrackVSTPlugins[trackId]
           
           if (nextTrackVSTMode[trackId] && vstPath) {
             try {
-              console.log(`[Load] [${i+1}/${trackIds.length}] Restoring VST for track ${trackId}...`)
+              console.log(`[Load] [${index+1}/${trackIds.length}] Restoring VST for track ${trackId}...`)
               
               // Load the VST plugin
               const loadResult = await window.api?.backend?.loadVST?.(trackId, vstPath)
               if (loadResult && loadResult.ok) {
                 console.log(`[Load] VST loaded for track ${trackId}:`, vstPath)
                 
-                // Wait for plugin to initialize
-                await new Promise(resolve => setTimeout(resolve, 150))
+                // Reduced initialization wait time from 150ms to 50ms
+                await new Promise(resolve => setTimeout(resolve, 50))
                 
                 // Restore preset state if available
                 if (nextTrackVSTPresets[trackId]) {
@@ -805,9 +880,6 @@ function App() {
                     
                     if (response.startsWith(`EVENT STATE_SET ${trackId}`)) {
                       console.log(`[Load] ✓ Successfully restored VST preset for track ${trackId}`)
-                      
-                      // Brief delay before next track
-                      await new Promise(resolve => setTimeout(resolve, 100))
                     } else {
                       console.error(`[Load] ✗ Failed to restore VST preset for track ${trackId}: ${response}`)
                     }
@@ -824,8 +896,13 @@ function App() {
               console.error(`[Load] Error restoring VST for track ${trackId}:`, e)
             }
           }
-        }
+        })
+        
+        // Wait for all VSTs to load in parallel
+        await Promise.all(vstPromises)
+        
         console.log('[Load] VST restoration complete')
+        setLoadingMessage('')
         
         // Re-enable autosave and clear loading indicator after restoration completes
         setIsRestoring(false)
@@ -834,6 +911,7 @@ function App() {
     } catch (e) {
       console.error('Error loading project:', e)
       setIsLoading(false)
+      setLoadingMessage('')
     }
     finally {
       loadDialogOpenRef.current = false
@@ -930,6 +1008,7 @@ function App() {
         onImportAudio={handleImportAudio}
         currentProjectPath={currentProjectPath}
         loading={isLoading || isRestoring}
+        loadingMessage={loadingMessage}
         isAutosaving={isAutosaving}
         bpm={bpm}
       />

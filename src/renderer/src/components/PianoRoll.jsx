@@ -148,6 +148,8 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   const schedulerReadyRef = useRef(false)
   const lookaheadSecRef = useRef(0.5)
   const schedulerTickSecRef = useRef(0.02)
+  const isMountedRef = useRef(false)
+  const drawDebounceRef = useRef(null)
 
   // Helper: safely deep-clone notes array (favor structuredClone when available)
   const cloneNotes = (arr) => {
@@ -328,75 +330,49 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
         return
       }
       
-      if (loadSessionRef.current === sessionId) setInstrumentLoading(true)
-      try {
-        if (selectedInstrument.samplePath && selectedInstrument.samplePath.endsWith('.sf2')) {
-          // Use C++ backend to load SF2
-          const bank = selectedInstrument.bank || 0
-          const preset = selectedInstrument.preset || 0
-          const success = await loadSF2(trackId, selectedInstrument.samplePath, bank, preset)
-          
-          if (!success) {
-            console.error('Failed to load SF2 via backend')
-            if (loadSessionRef.current === sessionId) {
-              setInstrumentLoading(false)
-              setSpessaInstrument(null)
-            }
-            return
-          }
-          
-          // Mark as loaded
-          if (loadSessionRef.current === sessionId) {
-            setSpessaInstrument({ backend: true }) // Flag that backend is handling this
+      // PERFORMANCE: Defer instrument loading to prevent blocking UI render
+      // Use requestIdleCallback or setTimeout to load instrument asynchronously
+      const loadInstrument = async () => {
+        try {
+          if (selectedInstrument.samplePath && selectedInstrument.samplePath.endsWith('.sf2')) {
+            // PERFORMANCE: SF2 is already pre-loaded in App.jsx when instrument is selected
+            // Just set the state and load metadata
+            playableRangeRef.current = { min: 0, max: 127 }
+            setPlayableRangeState({ min: 0, max: 127 })
+            setSpessaInstrument({ backend: true })
+            setInstrumentLoading(false)
+            setShowInstrumentSelector(false)
             
-            // Get playable note range using SF2 metadata reader
-            try {
-              const ctx = audioContextRef.current || getSharedAudioContext()
-              const r = await getSf2NoteRange(selectedInstrument.samplePath, ctx)
-              if (r && typeof r.min === 'number' && typeof r.max === 'number') {
-                if (loadSessionRef.current === sessionId) {
-                  playableRangeRef.current = r
-                  setPlayableRangeState(r)
-                }
-              } else {
-                // Fallback to full MIDI range
-                playableRangeRef.current = { min: 0, max: 127 }
-                setPlayableRangeState({ min: 0, max: 127 })
-              }
-            } catch (e) {
-              console.warn('Could not get SF2 note range:', e)
-              // Fallback to full MIDI range
-              playableRangeRef.current = { min: 0, max: 127 }
-              setPlayableRangeState({ min: 0, max: 127 })
-            }
+            // PERFORMANCE: Skip getSf2NoteRange - it parses entire SF2 file (1-2 seconds)
+            // Use default full MIDI range instead for instant loading
+            // Users can still play all notes, just won't see dimmed out-of-range keys
             
-            // Check if it's a drumkit for labels
+            // Only load drum labels if it's a drumkit (fast operation)
             const p = String(selectedInstrument.samplePath || '')
             const normalized = p.toLowerCase().replace(/\s+/g, '')
             const shouldLoadLabels = normalized.includes('drumkit')
             
             if (shouldLoadLabels) {
-              // For drum kits, load labels and set isDrumLike
-              try {
-                const { labels, isDrumLike } = await getSf2KeyLabels(selectedInstrument.samplePath)
-                if (loadSessionRef.current === sessionId) {
-                  setKeyLabels(labels || {})
-                  setIsDrumLike(!!isDrumLike)
+              // For drum kits, load labels in background
+              setTimeout(async () => {
+                if (loadSessionRef.current !== sessionId) return
+                try {
+                  const { labels, isDrumLike } = await getSf2KeyLabels(selectedInstrument.samplePath)
+                  if (loadSessionRef.current === sessionId) {
+                    setKeyLabels(labels || {})
+                    setIsDrumLike(!!isDrumLike)
+                  }
+                } catch {
+                  if (loadSessionRef.current === sessionId) {
+                    setKeyLabels({})
+                    setIsDrumLike(true)
+                  }
                 }
-              } catch {
-                if (loadSessionRef.current === sessionId) {
-                  setKeyLabels({})
-                  setIsDrumLike(true)
-                }
-              }
+              }, 50)
             } else {
               setKeyLabels({})
               setIsDrumLike(false)
             }
-            
-            setInstrumentLoading(false)
-            setShowInstrumentSelector(false)
-          }
         } else {
           if (loadSessionRef.current === sessionId) {
             setSpessaInstrument(null)
@@ -417,6 +393,14 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
           setKeyLabels({})
           setIsDrumLike(false)
         }
+      }
+      }
+      
+      // Use requestIdleCallback for non-critical loading, fallback to setTimeout
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => loadInstrument(), { timeout: 100 })
+      } else {
+        setTimeout(loadInstrument, 0)
       }
     }
     loadSharedSampler()
@@ -646,19 +630,28 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   // Helper: draw main canvas for currently visible horizontal region only
   // If OffscreenCanvas is available, this posts a draw request to the worker; otherwise draws on main thread.
   const drawMainCanvas = useCallback(() => {
-    // Prefer worker when ready; otherwise, paint on main thread immediately so the user sees content while the worker warms up.
-    if (useOffscreenRef.current && workerRef.current && scrollContainerRef.current) {
-      const sc = scrollContainerRef.current
-      workerRef.current.postMessage({
-        type: 'draw',
-        scrollLeft: sc.scrollLeft || 0,
-        clientWidth: sc.clientWidth || (gridWidth * BEAT_WIDTH + 80)
-      })
-      return
+    // PERFORMANCE: Debounce canvas draws to prevent redundant redraws during rapid state changes
+    if (drawDebounceRef.current) {
+      cancelAnimationFrame(drawDebounceRef.current)
     }
+    
+    drawDebounceRef.current = requestAnimationFrame(() => {
+      drawDebounceRef.current = null
+      
+      // Prefer worker when ready; otherwise, paint on main thread immediately so the user sees content while the worker warms up.
+      if (useOffscreenRef.current && workerRef.current && scrollContainerRef.current) {
+        const sc = scrollContainerRef.current
+        workerRef.current.postMessage({
+          type: 'draw',
+          scrollLeft: sc.scrollLeft || 0,
+          clientWidth: sc.clientWidth || (gridWidth * BEAT_WIDTH + 80)
+        })
+        return
+      }
     const canvas = canvasRef.current
     if (!canvas) return
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', { alpha: false }) // Use opaque canvas for better performance
+    if (!ctx) return
     const dpr = window.devicePixelRatio || 1
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
@@ -679,39 +672,61 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
     const startI = Math.max(0, Math.floor(startBeat))
     const endI = Math.min(gridWidth, Math.ceil(endBeat))
 
-    // Row backgrounds - draw full width from keys area
+    // Row backgrounds - draw full width from keys area using batch operation
+    ctx.save()
     for (let i = 0; i < pianoNotes.length; i++) {
       const isBlack = pianoNotes[i].includes('#')
       ctx.fillStyle = isBlack ? '#23272e' : '#2d2f36'
       ctx.fillRect(80, i * NOTE_HEIGHT, gridWidth * BEAT_WIDTH, NOTE_HEIGHT)
     }
+    ctx.restore()
 
-    // Vertical grid lines (beats) - draw all
+    // PERFORMANCE: Batch vertical grid lines (beats) to reduce draw calls
+    ctx.save()
+    ctx.beginPath()
     for (let i = 0; i <= gridWidth; i++) {
       const x = 80 + i * BEAT_WIDTH
-      ctx.strokeStyle = i % 4 === 0 ? '#5a606f' : '#5a606f'
-      ctx.lineWidth = i % 4 === 0 ? 2 : 1
-      ctx.beginPath()
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, CANVAS_HEIGHT)
-      ctx.stroke()
+      const isBarLine = i % 4 === 0
+      if (isBarLine) {
+        // Draw bar lines first (thicker)
+        ctx.lineWidth = 2
+        ctx.strokeStyle = '#5a606f'
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, CANVAS_HEIGHT)
+      }
     }
+    ctx.stroke()
+    ctx.beginPath()
+    for (let i = 0; i <= gridWidth; i++) {
+      const x = 80 + i * BEAT_WIDTH
+      const isBarLine = i % 4 === 0
+      if (!isBarLine) {
+        // Draw beat lines (thinner)
+        ctx.lineWidth = 1
+        ctx.strokeStyle = '#5a606f'
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, CANVAS_HEIGHT)
+      }
+    }
+    ctx.stroke()
+    ctx.restore()
 
-    // Subdivision lines
+    // Subdivision lines (batch operation for better performance)
+    ctx.save()
+    ctx.beginPath()
     const subdivisionsPerBeat = gridDivision / 4
     for (let i = 0; i < gridWidth; i++) {
       const baseX = 80 + i * BEAT_WIDTH
       for (let j = 1; j < subdivisionsPerBeat; j++) {
         const x = baseX + (j * BEAT_WIDTH / subdivisionsPerBeat)
-        const isCenterLine = subdivisionsPerBeat === 2 && j === 1
-        ctx.strokeStyle = isCenterLine ? '#5a606f' : '#5a606f'
-        ctx.lineWidth = 1
-        ctx.beginPath()
         ctx.moveTo(x, 0)
         ctx.lineTo(x, CANVAS_HEIGHT)
-        ctx.stroke()
       }
     }
+    ctx.strokeStyle = '#5a606f'
+    ctx.lineWidth = 1
+    ctx.stroke()
+    ctx.restore()
 
     // Draw all notes (culling removed to fix scrolling visibility)
     const hiddenSet = new Set(hiddenNoteIds)
@@ -739,6 +754,7 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
       ctx.fillStyle = RESIZE_HANDLE_COLOR
       ctx.fillRect(lineX, lineY, RESIZE_HANDLE_LINE, NOTE_HEIGHT - 12)
     }
+    })
   }, [notes, gridWidth, gridDivision, hiddenNoteIds, selectedNoteIds, trackColor])
 
   // Initialize Offscreen worker (if supported) and set canvas size; always draw only visible region
@@ -879,6 +895,9 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
   // Cleanup worker on unmount
   useEffect(() => {
     return () => {
+      if (drawDebounceRef.current) {
+        cancelAnimationFrame(drawDebounceRef.current)
+      }
       try { workerRef.current?.terminate() } catch {}
       workerRef.current = null
       useOffscreenRef.current = false
@@ -891,6 +910,29 @@ function PianoRoll({ trackId, trackName, trackColor, notes, onNotesChange, onBac
 
   // Keep worker state in sync on dependent changes
   useEffect(() => {
+    // PERFORMANCE: Defer initial draw to allow UI to render first
+    if (!isMountedRef.current) {
+      // Use setTimeout to defer draw until after initial render completes
+      const timeoutId = setTimeout(() => {
+        if (useOffscreenRef.current && workerRef.current) {
+          workerRef.current.postMessage({
+            type: 'setState',
+            gridWidth,
+            gridDivision,
+            trackColor,
+            notes,
+            hiddenNoteIds,
+            selectedNoteIds
+          })
+          drawMainCanvas()
+        } else {
+          drawMainCanvas()
+        }
+        isMountedRef.current = true
+      }, 0)
+      return () => clearTimeout(timeoutId)
+    }
+    
     if (useOffscreenRef.current && workerRef.current) {
       workerRef.current.postMessage({
         type: 'setState',

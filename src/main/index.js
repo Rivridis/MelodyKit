@@ -799,9 +799,12 @@ app.whenReady().then(() => {
         return { ok: false, canceled: true }
       }
       const filePath = filePaths[0]
-  const content = fs.readFileSync(filePath, 'utf-8')
-  // Support both .melodykit (JSON content) and .json
-  const parsed = JSON.parse(content)
+      
+      // PERFORMANCE OPTIMIZATION: Use async file reading for large project files
+      // This prevents blocking the main thread for large files
+      const content = await fs.promises.readFile(filePath, 'utf-8')
+      const parsed = JSON.parse(content)
+      
       return { ok: true, path: filePath, project: parsed }
     } catch (error) {
       console.error('Error opening project:', error)
