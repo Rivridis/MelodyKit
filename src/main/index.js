@@ -755,6 +755,31 @@ app.whenReady().then(() => {
     }
   })
 
+  // IPC: open sequencer sounds folder in file explorer
+  ipcMain.handle('sequencer:openFolder', async () => {
+    try {
+      const seqDir = path.join(resolveResourcesRoot(), 'Sequencer')
+      await shell.openPath(seqDir)
+      return { ok: true }
+    } catch (e) {
+      console.error('sequencer:openFolder error', e)
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  // IPC: open instrument category folder in file explorer
+  ipcMain.handle('instruments:openFolder', async (event, { category }) => {
+    try {
+      const resourcesPath = resolveResourcesRoot()
+      const categoryPath = category ? path.join(resourcesPath, category) : resourcesPath
+      await shell.openPath(categoryPath)
+      return { ok: true }
+    } catch (e) {
+      console.error('instruments:openFolder error', e)
+      return { ok: false, error: String(e) }
+    }
+  })
+
   // IPC handler to get available instruments from resources folder
   ipcMain.handle('get-instruments', async () => {
     try {
