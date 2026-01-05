@@ -37,5 +37,5 @@ $ npm run build:linux
 - Fix play button when no track is there - DONE
 - Add spacebar as shortcut to play - DONE
 - Add Effects VST
-- Add VST C++ backend
+- Add VST C++ backend - DONE
 
