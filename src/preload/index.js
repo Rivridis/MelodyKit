@@ -4,6 +4,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 // Custom APIs for renderer
 const api = {
   getInstruments: () => ipcRenderer.invoke('get-instruments'),
+  openInstrumentsFolder: (category) => ipcRenderer.invoke('instruments:openFolder', { category }),
   getResourcePath: (relativePath) => ipcRenderer.invoke('get-resource-path', relativePath),
   saveWav: (bytes, defaultFileName) => ipcRenderer.invoke('save-wav', { bytes, defaultFileName }),
   saveProject: (project, defaultFileName) => ipcRenderer.invoke('project:save', { project, defaultFileName }),
@@ -15,7 +16,8 @@ const api = {
   openAudioFiles: () => ipcRenderer.invoke('audio:open'),
   openSampleFile: () => ipcRenderer.invoke('audio:open-sample'),
   sequencer: {
-    listSounds: () => ipcRenderer.invoke('sequencer:listSounds')
+    listSounds: () => ipcRenderer.invoke('sequencer:listSounds'),
+    openFolder: () => ipcRenderer.invoke('sequencer:openFolder')
   },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),

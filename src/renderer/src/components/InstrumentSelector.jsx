@@ -97,6 +97,15 @@ function InstrumentSelector({ isOpen, onClose, onSelectInstrument, currentInstru
               <h2 className="text-2xl font-bold text-white">
                 {selectedCategory ? selectedCategory : 'Choose Category'}
               </h2>
+              {selectedCategory && (
+                <button
+                  onClick={() => window.api?.openInstrumentsFolder?.(selectedCategory)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors"
+                  title="Open instruments folder"
+                >
+                  📁
+                </button>
+              )}
             </div>
             <button
               onClick={onClose}

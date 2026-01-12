@@ -148,6 +148,13 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
           ← Back
         </button>
         <h2 className="text-white font-semibold">Beat Sequencer</h2>
+        <button
+          onClick={() => window.api?.sequencer?.openFolder?.()}
+          className="inline-flex items-center justify-center h-8 w-8 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors"
+          title="Open beats folder"
+        >
+          📁
+        </button>
         <div className="flex-1" />
         <div className="flex items-center gap-2 text-sm">
           {/* Play/Stop */}

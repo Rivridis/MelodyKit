@@ -1,21 +1,16 @@
 # MelodyKit
 
-An Electron based Music creation app
+MelodyKit is a lightweight, open-source DAW focused on fast music sketching, beat making, and simple workflows without unnecessary complexity.
+
+If you want the windows installer, please purchase it, or try the basic version from https://www.patreon.com/c/Rivridis. Thanks for your support!
+
+## Images
+<img width="1919" height="1076" alt="Screenshot 2026-01-03 174318" src="https://github.com/user-attachments/assets/a4a921df-a340-4510-9b26-f41af90da545" />
+
 
 ## Recommended IDE Setup
 
 - [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
-
-## Contributor Code Use Agreement
-By accessing or contributing to this private repository, you agree to the following:
-
-- All code and assets in this project are private and proprietary.
-- You may use the code only for tasks explicitly authorized by the owner.
-- No sharing, copying, reusing, redistributing, or reselling any part of the code is allowed.
-- No derivative works or use of this code in personal or commercial projects.
-- You must keep all materials confidential, even after access ends.
-- The owner may revoke access at any time.
-- Accessing or contributing to this repository constitutes your acceptance of these terms.
 
 ## Project Setup
 
@@ -48,5 +43,5 @@ $ npm run build:linux
 - Fix play button when no track is there - DONE
 - Add spacebar as shortcut to play - DONE
 - Add Effects VST
-- Add VST C++ backend
+- Add VST C++ backend - DONE
 
