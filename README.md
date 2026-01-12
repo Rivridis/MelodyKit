@@ -1,8 +1,12 @@
 # MelodyKit
 
-An Electron based Music creation app
+MelodyKit is a lightweight, open-source DAW focused on fast music sketching, beat making, and simple workflows without unnecessary complexity.
 
-If you want the windows installer, please purchase it from https://www.patreon.com/c/Rivridis. Thanks for your support!
+If you want the windows installer, please purchase it, or try the basic version from https://www.patreon.com/c/Rivridis. Thanks for your support!
+
+## Images
+<img width="1919" height="1076" alt="Screenshot 2026-01-03 174318" src="https://github.com/user-attachments/assets/a4a921df-a340-4510-9b26-f41af90da545" />
+
 
 ## Recommended IDE Setup
 
