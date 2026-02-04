@@ -817,7 +817,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     ctx.strokeStyle = '#3f3f46'
     ctx.lineWidth = 1
     ctx.strokeRect(0, 0, CANVAS_WIDTH, TIMELINE_HEIGHT)
-  }, [gridWidth, beatWidth, loopStart, loopEnd])
+  }, [gridWidth, beatWidth, loopStart, loopEnd, tracks.length])
 
   // Setup playhead canvas
   useEffect(() => {
@@ -834,7 +834,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     ctx.clearRect(0, 0, CANVAS_WIDTH, TIMELINE_HEIGHT)
     // Initial draw
     drawTimelinePlayhead(currentBeatRef.current)
-  }, [gridWidth, beatWidth])
+  }, [gridWidth, beatWidth, tracks.length])
 
   // Setup tracks playhead canvas
   useEffect(() => {
@@ -2383,6 +2383,38 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   return (
     <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-zinc-900">
+      <style>{`
+        .logic-volume {
+          -webkit-appearance: none;
+          appearance: none;
+          height: 8px;
+          border-radius: 9999px;
+          outline: none;
+          background: #3f3f46;
+        }
+        .logic-volume::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: #f59e0b;
+          border: 2px solid #111827;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+        }
+        .logic-volume::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: #f59e0b;
+          border: 2px solid #111827;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+        }
+        .logic-volume::-moz-range-track {
+          height: 8px;
+          border-radius: 9999px;
+          background: #3f3f46;
+        }
+      `}</style>
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-2 bg-zinc-900 border-b border-zinc-800">
         <div className="flex items-center gap-3">
@@ -2678,8 +2710,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                             try { pre.gain.setValueAtTime(preTarget, audioContextRef.current.currentTime) } catch { pre.gain.value = preTarget }
                           }
                         }}
-                        className="appearance-none w-full h-1 bg-zinc-700 rounded outline-none focus:ring-2 focus:ring-amber-500"
-                        style={{ pointerEvents: 'auto' }}
+                        className="logic-volume w-full focus:ring-2 focus:ring-amber-500"
+                        style={{
+                          pointerEvents: 'auto',
+                          background: `linear-gradient(90deg, #f59e0b ${Math.round((value / 150) * 100)}%, #3f3f46 ${Math.round((value / 150) * 100)}%)`
+                        }}
                       />
                       <span className="text-xs text-zinc-300 select-none" style={{ pointerEvents: 'auto', width: 34, textAlign: 'right' }}>{value}%</span>
                       </div>
