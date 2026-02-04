@@ -63,6 +63,8 @@ function calculateRegion(notes) {
   }
 }
 
+const sharedAudioClipCache = {}
+
 const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
@@ -97,7 +99,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const trackAutomationRef = useRef(trackAutomation)
   const tracksRef = useRef(tracks) // Store tracks array to access current track types
   const loadedInstrumentsRef = useRef({}) // Store loaded instruments by track ID
-  const loadedAudioClipsRef = useRef({}) // Store decoded AudioBuffer by track ID for audio tracks
+  const loadedAudioClipsRef = useRef(sharedAudioClipCache) // Store decoded AudioBuffer by track ID for audio tracks
   const beatSamplePathsRef = useRef({}) // { [trackId]: { [rowId]: filePath } }
   const audioSourcesRef = useRef({}) // Active AudioBufferSourceNodes per audio track
   const activeSourcesRef = useRef([]) // Track active audio sources
@@ -446,13 +448,19 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     const ctx = audioContextRef.current
     if (!ctx) return
     const load = async () => {
-      const needsDecode = tracks.some((t) => t.type === 'audio' && t.audioClip && !loadedAudioClipsRef.current[t.id])
+      const needsDecode = tracks.some((t) => {
+        if (t.type !== 'audio' || !t.audioClip) return false
+        const rec = loadedAudioClipsRef.current[t.id]
+        return !rec?.buffer || rec?.context !== ctx
+      })
       if (needsDecode) {
         try { onLoadingChange?.(true) } catch {}
       }
       let maxNeededBeats = gridWidth
       for (const t of tracks) {
-        if (t.type === 'audio' && t.audioClip && !loadedAudioClipsRef.current[t.id]) {
+        if (t.type === 'audio' && t.audioClip) {
+          const rec = loadedAudioClipsRef.current[t.id]
+          if (rec?.buffer && rec?.context === ctx) continue
           try {
             let bytes = t.audioClip.bytes
             if (!bytes && t.audioClip.path && window.api?.readAudioFile) {
@@ -463,7 +471,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const uint8 = Uint8Array.from(bytes)
               const ab = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength)
               const buffer = await ctx.decodeAudioData(ab)
-              loadedAudioClipsRef.current[t.id] = { buffer }
+              loadedAudioClipsRef.current[t.id] = { buffer, context: ctx }
               const trackOffset = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
               const loopBeats = getAudioLoopBeats(t.id, buffer, bpm)
               maxNeededBeats = Math.max(maxNeededBeats, trackOffset + loopBeats)
