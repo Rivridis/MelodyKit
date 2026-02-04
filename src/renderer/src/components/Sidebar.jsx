@@ -21,7 +21,9 @@ function Sidebar({
   trackSamplerPaths,
   onChangeInstrument,
   onChangeVst,
-  onChangeSample
+  onChangeSample,
+  onCreateInstrumentTrack,
+  onCreateLoopTrack
 }) {
   const [editingTrackId, setEditingTrackId] = useState(null)
   const [editName, setEditName] = useState('')
@@ -220,7 +222,10 @@ function Sidebar({
             {tracks.map((track, index) => (
               <div
                 key={track.id}
-                onClick={() => onSelectTrack(track.id)}
+                onClick={() => {
+                  if (track.type === 'audio') return
+                  onSelectTrack(track.id)
+                }}
                 onDoubleClick={() => handleDoubleClick(track)}
                 className={`
                   mb-2 p-3 rounded-lg cursor-pointer transition-all
@@ -432,13 +437,14 @@ function Sidebar({
                                 {packInstruments
                                   .filter(i => (i.folderName || i.category || 'Other') === group)
                                   .map((i) => (
-                                    <div
+                                    <button
                                       key={i.samplePath || i.name}
-                                      className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200"
+                                      onClick={() => onCreateInstrumentTrack?.(i)}
+                                      className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-800/70"
                                       title={i.samplePath}
                                     >
                                       {i.name}
-                                    </div>
+                                    </button>
                                   ))}
                               </div>
                             )}
@@ -532,13 +538,14 @@ function Sidebar({
                             {isExpanded && (
                               <div className="mt-3 flex flex-col gap-1 pl-2">
                                 {(sounds || []).map((s) => (
-                                  <div
+                                  <button
                                     key={`${pack}:${s.fileName}`}
-                                    className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200"
+                                    onClick={() => onCreateLoopTrack?.(s)}
+                                    className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-800/70"
                                     title={s.filePath}
                                   >
                                     {s.name}
-                                  </div>
+                                  </button>
                                 ))}
                               </div>
                             )}

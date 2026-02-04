@@ -63,7 +63,7 @@ function calculateRegion(notes) {
   }
 }
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -148,6 +148,14 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     }
     
     return sortedPoints[sortedPoints.length - 1].value * 150
+  }
+
+  const getAudioLoopBeats = (trackId, buf, bpmValue) => {
+    if (!buf) return 0
+    const clipBeats = (buf.duration * bpmValue) / 60
+    const loopBeats = typeof trackLengths?.[trackId] === 'number' ? trackLengths[trackId] : null
+    if (loopBeats && loopBeats > 0) return Math.max(clipBeats, loopBeats)
+    return clipBeats
   }
 
   // Ensure per-track gain chain exists for current context
@@ -438,6 +446,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     const ctx = audioContextRef.current
     if (!ctx) return
     const load = async () => {
+      const needsDecode = tracks.some((t) => t.type === 'audio' && t.audioClip && !loadedAudioClipsRef.current[t.id])
+      if (needsDecode) {
+        try { onLoadingChange?.(true) } catch {}
+      }
+      let maxNeededBeats = gridWidth
       for (const t of tracks) {
         if (t.type === 'audio' && t.audioClip && !loadedAudioClipsRef.current[t.id]) {
           try {
@@ -451,21 +464,43 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const ab = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength)
               const buffer = await ctx.decodeAudioData(ab)
               loadedAudioClipsRef.current[t.id] = { buffer }
+              const trackOffset = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
+              const loopBeats = getAudioLoopBeats(t.id, buffer, bpm)
+              maxNeededBeats = Math.max(maxNeededBeats, trackOffset + loopBeats)
             }
           } catch (e) {
             console.error('Failed to decode audio clip for track', t.id, e)
           }
         }
       }
+      // Include already-decoded clips too
+      tracks.forEach((t) => {
+        if (t.type !== 'audio') return
+        const rec = loadedAudioClipsRef.current?.[t.id]
+        if (!rec?.buffer) return
+        const trackOffset = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
+        const loopBeats = getAudioLoopBeats(t.id, rec.buffer, bpm)
+        maxNeededBeats = Math.max(maxNeededBeats, trackOffset + loopBeats)
+      })
       // Cleanup for removed tracks
       Object.keys(loadedAudioClipsRef.current).forEach((id) => {
         if (!tracks.find(t => String(t.id) === String(id) && t.type === 'audio')) {
           delete loadedAudioClipsRef.current[id]
         }
       })
+      if (maxNeededBeats > gridWidth) {
+        const next = Math.ceil(maxNeededBeats + 4)
+        setGridWidth?.((gw) => (next > gw ? next : gw))
+      }
+      if (needsDecode) {
+        onAudioDecodeDone?.()
+      }
+      if (needsDecode && !isRestoring && !isImportingAudio) {
+        try { onLoadingChange?.(false) } catch {}
+      }
     }
     load()
-  }, [tracks])
+  }, [tracks, bpm, trackOffsets, trackLengths, gridWidth, setGridWidth, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone])
 
   // Load drum samples for beat tracks into the backend (JUCE)
   useEffect(() => {
@@ -909,7 +944,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   ctx.textBaseline = 'top'
   const sidebarTextX = padding + 4
   const sidebarMaxW = SIDEBAR_WIDTH - sidebarTextX - 12
-  drawEllipsizedText(ctx, track.name, sidebarTextX, y + padding, sidebarMaxW)
+  const displayName = track.type === 'audio' ? 'Audio Track' : track.name
+  drawEllipsizedText(ctx, displayName, sidebarTextX, y + padding, sidebarMaxW)
       
       // Note count / info
       const notes = trackNotes[track.id] || []
@@ -931,7 +967,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const rec = loadedAudioClipsRef.current?.[track.id]
         const durationSec = rec?.buffer?.duration || 0
         if (durationSec > 0) {
-          const beats = (durationSec * bpm) / 60
+          let beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
+          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
+            beats = Math.max(beats, resizing.currentLen)
+          }
           // Apply offset for audio tracks
           if (dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number') {
             trackOffset = dragging.currentBeat
@@ -1018,7 +1057,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         ctx.beginPath()
         ctx.rect(regionX, regionY, regionWidth, regionHeight)
         ctx.clip()
-        ctx.fillText(track.name, regionX + labelPadding, regionY + labelPadding)
+        const regionLabel = track.type === 'audio' ? (track.audioClip?.name || 'Audio') : track.name
+        ctx.fillText(regionLabel, regionX + labelPadding, regionY + labelPadding)
         ctx.restore()
         
         // Waveform-like visualization (simplified)
@@ -1033,8 +1073,28 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           ctx.stroke()
         }
 
-        // Resize handle for beat tracks
-        if (track.type === 'beat') {
+        // Audio loop seams (clip boundaries within extended region)
+        if (track.type === 'audio') {
+          const rec = loadedAudioClipsRef.current?.[track.id]
+          const clipBeats = rec?.buffer ? (rec.buffer.duration * bpm) / 60 : 0
+          if (clipBeats > 0 && regionWidth > clipBeats * beatWidth) {
+            const seamSpacing = clipBeats * beatWidth
+            ctx.save()
+            ctx.strokeStyle = '#ffffff55'
+            ctx.lineWidth = 1
+            ctx.setLineDash([4, 4])
+            for (let x = regionX + seamSpacing; x < regionX + regionWidth - 2; x += seamSpacing) {
+              ctx.beginPath()
+              ctx.moveTo(x, regionY + 4)
+              ctx.lineTo(x, regionY + regionHeight - 4)
+              ctx.stroke()
+            }
+            ctx.restore()
+          }
+        }
+
+        // Resize handle for beat/audio tracks
+        if (track.type === 'beat' || track.type === 'audio') {
           const handleX = regionX + regionWidth - 4
           ctx.fillStyle = '#ffffff99'
           ctx.fillRect(handleX, regionY + 6, 3, regionHeight - 12)
@@ -1221,7 +1281,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           if (t.type === 'audio') {
             const buf = loadedAudioClipsRef.current?.[t.id]?.buffer
             if (buf) {
-              const beats = (buf.duration * bpm) / 60 + trackOffset
+              const beats = getAudioLoopBeats(t.id, buf, bpm) + trackOffset
               if (beats > maxEndBeat) maxEndBeat = beats
             }
             return
@@ -1254,9 +1314,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             const { g } = ensureTrackChain(t.id)
             if (rec && rec.buffer && ctx) {
               const buf = rec.buffer
+              const loopBeats = getAudioLoopBeats(t.id, buf, bpm)
               // Apply track offset to audio playback
               const trackOffset = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
               const trackOffsetSec = trackOffset * (60 / bpm)
+              const trackEndSec = trackOffsetSec + loopBeats * (60 / bpm)
               
               // Calculate when to start this audio relative to now
               const playheadSec = startOffsetSecBase
@@ -1265,12 +1327,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               if (playheadSec >= trackStartSec) {
                 // Playhead is already past track start - start playing from current position in audio
                 const offsetIntoAudio = playheadSec - trackStartSec
-                const offset = Math.max(0, Math.min(buf.duration, offsetIntoAudio))
-                const remaining = buf.duration - offset
+                const offset = Math.max(0, Math.min(buf.duration, offsetIntoAudio % buf.duration))
+                const remaining = trackEndSec - playheadSec
                 
                 if (remaining > 0.005) {
                   const src = ctx.createBufferSource()
                   src.buffer = buf
+                  if (loopBeats > (buf.duration * bpm) / 60 + 0.001) {
+                    src.loop = true
+                    src.loopStart = 0
+                    src.loopEnd = buf.duration
+                  }
                   // Connect directly to track gain, bypassing pre-gain for audio to avoid clipping
                   if (g) {
                     src.connect(g)
@@ -1279,7 +1346,12 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                   } else {
                     src.connect(ctx.destination)
                   }
-                  try { src.start(ctx.currentTime, offset) } catch {}
+                  try {
+                    src.start(ctx.currentTime, offset)
+                    if (remaining < 60 * 60) {
+                      src.stop(ctx.currentTime + Math.max(0, remaining))
+                    }
+                  } catch {}
                   audioSourcesRef.current[t.id] = src
                 }
               } else {
@@ -1288,6 +1360,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 if (delaySeconds < 60) { // Only schedule if it's within a minute
                   const src = ctx.createBufferSource()
                   src.buffer = buf
+                  if (loopBeats > (buf.duration * bpm) / 60 + 0.001) {
+                    src.loop = true
+                    src.loopStart = 0
+                    src.loopEnd = buf.duration
+                  }
                   // Connect directly to track gain, bypassing pre-gain for audio to avoid clipping
                   if (g) {
                     src.connect(g)
@@ -1296,7 +1373,13 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                   } else {
                     src.connect(ctx.destination)
                   }
-                  try { src.start(ctx.currentTime + delaySeconds, 0) } catch {}
+                  try {
+                    src.start(ctx.currentTime + delaySeconds, 0)
+                    const remaining = trackEndSec - trackStartSec
+                    if (remaining < 60 * 60) {
+                      src.stop(ctx.currentTime + delaySeconds + Math.max(0, remaining))
+                    }
+                  } catch {}
                   audioSourcesRef.current[t.id] = src
                 }
               }
@@ -1350,22 +1433,28 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                   const playheadSec = startOffsetSecBase
                   const trackStartSec = trackOffsetSec
                   
+                  const loopBeats = getAudioLoopBeats(t.id, buf, currentBpm)
                   // Only play if the loop region intersects with this audio clip
-                  const trackEndSec = trackOffsetSec + buf.duration
+                  const trackEndSec = trackOffsetSec + loopBeats * (60 / currentBpm)
                   const loopStartSec = currentLoopStart * (60 / currentBpm)
                   const loopEndSec = currentLoopEnd * (60 / currentBpm)
                   
                   // Check if audio clip is within loop region
                   if (trackStartSec < loopEndSec && trackEndSec > loopStartSec) {
-                    if (playheadSec >= trackStartSec && playheadSec < trackStartSec + buf.duration) {
+                    if (playheadSec >= trackStartSec && playheadSec < trackEndSec) {
                       // Start from current position in audio
                       const offsetIntoAudio = playheadSec - trackStartSec
-                      const offset = Math.max(0, Math.min(buf.duration, offsetIntoAudio))
-                      const remaining = buf.duration - offset
+                      const offset = Math.max(0, Math.min(buf.duration, offsetIntoAudio % buf.duration))
+                      const remaining = trackEndSec - playheadSec
                       
                       if (remaining > 0.005) {
                         const src = ctx.createBufferSource()
                         src.buffer = buf
+                        if (loopBeats > (buf.duration * currentBpm) / 60 + 0.001) {
+                          src.loop = true
+                          src.loopStart = 0
+                          src.loopEnd = buf.duration
+                        }
                         if (g) {
                           src.connect(g)
                         } else if (masterGainRef.current) {
@@ -1373,7 +1462,12 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                         } else {
                           src.connect(ctx.destination)
                         }
-                        try { src.start(ctx.currentTime, offset) } catch {}
+                        try {
+                          src.start(ctx.currentTime, offset)
+                          if (remaining < 60 * 60) {
+                            src.stop(ctx.currentTime + Math.max(0, remaining))
+                          }
+                        } catch {}
                         audioSourcesRef.current[t.id] = src
                       }
                     } else if (playheadSec < trackStartSec) {
@@ -1382,6 +1476,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                       if (delaySec < (loopEndSec - loopStartSec)) {
                         const src = ctx.createBufferSource()
                         src.buffer = buf
+                        if (loopBeats > (buf.duration * currentBpm) / 60 + 0.001) {
+                          src.loop = true
+                          src.loopStart = 0
+                          src.loopEnd = buf.duration
+                        }
                         if (g) {
                           src.connect(g)
                         } else if (masterGainRef.current) {
@@ -1389,7 +1488,13 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                         } else {
                           src.connect(ctx.destination)
                         }
-                        try { src.start(ctx.currentTime + delaySec) } catch {}
+                        try {
+                          src.start(ctx.currentTime + delaySec)
+                          const remaining = trackEndSec - trackStartSec
+                          if (remaining < 60 * 60) {
+                            src.stop(ctx.currentTime + delaySec + Math.max(0, remaining))
+                          }
+                        } catch {}
                         audioSourcesRef.current[t.id] = src
                       }
                     }
@@ -1511,10 +1616,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   useEffect(() => {
     const handleGlobalMouseUp = () => {
       if (resizing) {
-        const { trackId, trackType, currentLen, startLen } = resizing
+        const { trackId, trackType, currentLen, startLen, minLen } = resizing
         const raw = Number(currentLen || startLen) || 4
         const bars = Math.max(1, Math.round(raw / 4))
-        const commitLen = bars * 4
+        let commitLen = bars * 4
         // Only suppress click if there was actual resizing (length changed)
         if (commitLen !== startLen) {
           resizeClickSuppressRef.current = true
@@ -1527,6 +1632,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             return { ...prev, [trackId]: { ...p, lengthBeats: commitLen } }
           })
         } else {
+          if (typeof minLen === 'number') commitLen = Math.max(minLen, commitLen)
           // Update MIDI track manual length
           setTrackLengths?.((prev) => ({ ...prev, [trackId]: commitLen }))
         }
@@ -1703,7 +1809,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const rec = loadedAudioClipsRef.current?.[track.id]
         const durationSec = rec?.buffer?.duration || 0
         if (durationSec > 0) {
-          const beats = (durationSec * bpm) / 60
+          const beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
           regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
           regionWidth = beats * beatWidth
           regionY = trackIndex * TRACK_HEIGHT + 12
@@ -1729,7 +1835,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const nearRight = Math.abs(x - (regionX + regionWidth)) <= 6
         const inRegion = x >= regionX && x <= regionX + regionWidth && inY
         
-        if (track.type === 'beat' && inY && nearRight) {
+        if ((track.type === 'beat' || track.type === 'audio') && inY && nearRight) {
           canvasRef.current.style.cursor = 'ew-resize'
         } else if (inRegion) {
           canvasRef.current.style.cursor = 'grab'
@@ -1780,7 +1886,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       const rec = loadedAudioClipsRef.current?.[track.id]
       const durationSec = rec?.buffer?.duration || 0
       if (durationSec > 0) {
-        beats = (durationSec * bpm) / 60
+        beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
         regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
         regionWidth = beats * beatWidth
         regionY = trackIndex * TRACK_HEIGHT + 12
@@ -1822,9 +1928,16 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     const nearRight = Math.abs(x - (regionX + regionWidth)) <= 6
     const inRegion = x >= regionX && x <= regionX + regionWidth && inY
     
-    if (track.type === 'beat' && inY && nearRight) {
-      // Start resizing (beat tracks only)
-      setResizing({ trackId: track.id, trackType: track.type, startX: x, startLen: beats, currentLen: beats })
+    if ((track.type === 'beat' || track.type === 'audio') && inY && nearRight) {
+      // Start resizing (beat/audio)
+      let minLen = 4
+      if (track.type === 'audio') {
+        const rec = loadedAudioClipsRef.current?.[track.id]
+        if (rec?.buffer) {
+          minLen = getAudioLoopBeats(track.id, rec.buffer, bpm)
+        }
+      }
+      setResizing({ trackId: track.id, trackType: track.type, startX: x, startLen: beats, currentLen: beats, minLen })
       e.preventDefault()
       e.stopPropagation()
     } else if (inRegion) {

@@ -64,6 +64,8 @@ function App() {
   const [currentProjectPath, setCurrentProjectPath] = useState(null)
   const [isLoading, setIsLoading] = useState(false) // TitleBar loading indicator
   const [loadingMessage, setLoadingMessage] = useState('') // Detailed loading progress message
+  const [isImportingAudio, setIsImportingAudio] = useState(false)
+  const [importLoadingMessage, setImportLoadingMessage] = useState('')
   const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
   const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
   const [showWelcome, setShowWelcome] = useState(true)
@@ -189,14 +191,82 @@ function App() {
     }
   }
 
+  const handleCreateLoopTrack = async (loopSound) => {
+    if (!loopSound?.filePath) return
+    try {
+      setIsImportingAudio(true)
+      setImportLoadingMessage('Adding loop...')
+      const readRes = await window.api?.readAudioFile?.(loopSound.filePath)
+      if (!readRes?.ok || !Array.isArray(readRes.bytes)) {
+        console.error('Failed to read loop audio:', readRes?.error || 'unknown error')
+        return
+      }
+      const id = Date.now()
+      const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
+      const name = loopSound.name || loopSound.fileName || `Loop ${tracks.length + 1}`
+      const track = {
+        id,
+        name,
+        color,
+        noteCount: 0,
+        type: 'audio',
+        audioClip: {
+          name,
+          bytes: readRes.bytes,
+          path: loopSound.filePath
+        }
+      }
+      setTracks((prev) => [...prev, track])
+      setTrackVolumes((prev) => ({ ...prev, [id]: 100 }))
+      setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
+      setTrackMuted((prev) => ({ ...prev, [id]: false }))
+      setTrackSoloed((prev) => ({ ...prev, [id]: false }))
+    } catch (err) {
+      console.error('Failed to add loop as audio track:', err)
+    } finally {
+      setIsImportingAudio(false)
+      setImportLoadingMessage('')
+    }
+  }
+
   // Import audio file(s) as new audio tracks
   const handleImportAudio = async () => {
     try {
+      setIsImportingAudio(true)
+      setImportLoadingMessage('Importing audio...')
+      const placeholderId = Date.now()
+      const placeholderTrack = {
+        id: placeholderId,
+        name: `Audio ${tracks.length + 1}`,
+        color: TRACK_COLORS[tracks.length % TRACK_COLORS.length],
+        noteCount: 0,
+        type: 'audio',
+        audioClip: {
+          name: 'Importing audio...',
+          bytes: null,
+          path: null,
+          isLoading: true
+        }
+      }
+      setTracks((prev) => [...prev, placeholderTrack])
+      setTrackVolumes((prev) => ({ ...prev, [placeholderId]: 100 }))
+      setTrackOffsets((prev) => ({ ...prev, [placeholderId]: 0 }))
+      setTrackMuted(prev => ({ ...prev, [placeholderId]: false }))
+      setTrackSoloed(prev => ({ ...prev, [placeholderId]: false }))
+
       const resp = await window.api?.openAudioFiles?.()
-      if (!resp) return
+      if (!resp) {
+        setTracks((prev) => prev.filter((t) => t.id !== placeholderId))
+        setIsImportingAudio(false)
+        setImportLoadingMessage('')
+        return
+      }
       if (!resp.ok || !Array.isArray(resp.files) || resp.files.length === 0) {
         // canceled or error
         if (resp && resp.error) console.error('Audio import failed:', resp.error)
+        setTracks((prev) => prev.filter((t) => t.id !== placeholderId))
+        setIsImportingAudio(false)
+        setImportLoadingMessage('')
         return
       }
       // Add one track per imported file
@@ -221,7 +291,10 @@ function App() {
         newTracks.push(track)
         newVolumes[id] = 100
       })
-      setTracks([...tracks, ...newTracks])
+      setTracks((prev) => {
+        const withoutPlaceholder = prev.filter((t) => t.id !== placeholderId)
+        return [...withoutPlaceholder, ...newTracks]
+      })
       setTrackVolumes(newVolumes)
       // Set default offsets
       const newOffsets = { ...trackOffsets }
@@ -235,8 +308,12 @@ function App() {
       setTrackOffsets(newOffsets)
       setTrackMuted(newMuted)
       setTrackSoloed(newSoloed)
+      setIsImportingAudio(false)
+      setImportLoadingMessage('')
     } catch (e) {
       console.error('Error importing audio:', e)
+      setIsImportingAudio(false)
+      setImportLoadingMessage('')
     }
   }
 
@@ -1085,8 +1162,8 @@ function App() {
         onExportWav={() => timelineRef.current?.exportWav?.()}
         onImportAudio={handleImportAudio}
         currentProjectPath={currentProjectPath}
-        loading={isLoading || isRestoring}
-        loadingMessage={loadingMessage}
+        loading={isLoading || isRestoring || isImportingAudio}
+        loadingMessage={isImportingAudio ? importLoadingMessage : loadingMessage}
         isAutosaving={isAutosaving}
         bpm={bpm}
       />
@@ -1154,6 +1231,8 @@ function App() {
           trackVSTPlugins={trackVSTPlugins}
           trackVSTLoading={trackVSTLoading}
           trackSamplerPaths={trackSamplerPaths}
+          onCreateInstrumentTrack={handleCreateInstrumentTrack}
+          onCreateLoopTrack={handleCreateLoopTrack}
           onChangeInstrument={(trackId, instrument) => {
             setTrackVSTMode(prev => ({ ...prev, [trackId]: false }))
             setTrackVSTPlugins(prev => {
@@ -1219,7 +1298,7 @@ function App() {
               />
             )
           ) : (
-            <TrackTimeline
+        <TrackTimeline
               ref={timelineRef}
               tracks={tracks}
               trackNotes={trackNotes}
@@ -1253,6 +1332,12 @@ function App() {
               loopEnd={loopEnd}
               setLoopEnd={setLoopEnd}
               onLoadingChange={setIsLoading}
+              isImportingAudio={isImportingAudio}
+              onAudioDecodeDone={() => {
+                if (!isImportingAudio) return
+                setIsImportingAudio(false)
+                setImportLoadingMessage('')
+              }}
               isRestoring={isRestoring}
             />
           )}
