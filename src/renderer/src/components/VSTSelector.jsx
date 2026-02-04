@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { loadVST, unloadVST, backendStatus } from '@renderer/utils/vstBackend'
 
-export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, onVSTLoaded, onVSTUnloaded, onClose }) {
+export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, onVSTLoaded, onVSTUnloaded, onClose, selectOnly = false, onSelectPath }) {
   const [vstPath, setVstPath] = useState('')
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(true)
@@ -44,6 +44,12 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
 
     if (!finalPath) {
       setError('Please select or enter a VST path')
+      return
+    }
+
+    if (selectOnly) {
+      if (onSelectPath) onSelectPath(finalPath)
+      if (onClose) onClose()
       return
     }
 
@@ -93,7 +99,10 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
     : availableVSTs
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <div className="bg-gradient-to-b from-[#2d2d2d] to-[#1f1f1f] rounded-xl shadow-2xl w-[680px] max-h-[85vh] overflow-hidden border border-gray-700/50">
         {/* Header */}
         <div className="bg-gradient-to-r from-[#3a3a3a] to-[#2d2d2d] px-6 py-4 border-b border-gray-700/50">
@@ -115,7 +124,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
 
         <div className="p-6 overflow-y-auto max-h-[calc(85vh-140px)]">
           {/* Current VST Status */}
-          {useVSTBackend && currentVSTPath && (
+          {!selectOnly && useVSTBackend && currentVSTPath && (
             <div className="mb-6 p-4 bg-amber-600/15 border border-amber-500/60 rounded-lg">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -277,7 +286,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
               disabled={loading || (!selectedVST && !vstPath.trim())}
               className="px-5 py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-lg shadow-amber-500/25"
             >
-              {loading ? 'Loading...' : 'Load Plugin'}
+              {loading ? 'Loading...' : (selectOnly ? 'Use Plugin' : 'Load Plugin')}
             </button>
           </div>
         </div>

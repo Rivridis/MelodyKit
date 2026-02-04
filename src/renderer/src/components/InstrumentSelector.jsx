@@ -75,11 +75,11 @@ function InstrumentSelector({ isOpen, onClose, onSelectInstrument, currentInstru
   return (
     <div 
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      onClick={onClose}
+      onMouseDown={onClose}
     >
       <div 
         className="w-[800px] h-[600px] bg-gradient-to-br from-zinc-900 to-zinc-950 rounded-2xl shadow-2xl border border-zinc-700 flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-6 py-4 border-b border-zinc-700 bg-zinc-800/50">

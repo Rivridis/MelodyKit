@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import TrackTimeline from './components/TrackTimeline'
 import TitleBar from './components/TitleBar'
 import SequencerPanel from './components/SequencerPanel'
+import AddTrackModal from './components/AddTrackModal'
 import { initBackend } from './utils/vstBackend'
 import { loadSF2 } from './utils/vstBackend'
 
@@ -66,6 +67,7 @@ function App() {
   const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent autosave during VST restoration
   const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
   const [showWelcome, setShowWelcome] = useState(true)
+  const [showAddTrackModal, setShowAddTrackModal] = useState(false)
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
 
@@ -82,37 +84,39 @@ function App() {
   // Add new track
   const handleAddTrack = () => {
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
+    const id = Date.now()
     const newTrack = {
-      id: Date.now(),
+      id,
       name: `Track ${tracks.length + 1}`,
       color: color,
       noteCount: 0
     }
     setTracks([...tracks, newTrack])
-    setTrackNotes(prev => ({ ...prev, [newTrack.id]: [] }))
+    setTrackNotes(prev => ({ ...prev, [id]: [] }))
     // No default instrument - user must select one
     setTrackInstruments(prev => ({ 
       ...prev, 
-      [newTrack.id]: null
+      [id]: null
     }))
     // Default volume 100%
     setTrackVolumes(prev => ({
       ...prev,
-      [newTrack.id]: 100
+      [id]: 100
     }))
     // Default offset 0
     setTrackOffsets(prev => ({
       ...prev,
-      [newTrack.id]: 0
+      [id]: 0
     }))
     // Default VST mode off
     setTrackVSTMode(prev => ({
       ...prev,
-      [newTrack.id]: false
+      [id]: false
     }))
     // Default mute/solo off
-    setTrackMuted(prev => ({ ...prev, [newTrack.id]: false }))
-    setTrackSoloed(prev => ({ ...prev, [newTrack.id]: false }))
+    setTrackMuted(prev => ({ ...prev, [id]: false }))
+    setTrackSoloed(prev => ({ ...prev, [id]: false }))
+    return id
   }
 
   // Add new beat (drum) track and open sequencer editor
@@ -133,6 +137,7 @@ function App() {
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))
     // Do not auto-open sequencer; stay on current view
+    return id
   }
 
   const handleAddSamplerTrack = () => {
@@ -151,6 +156,37 @@ function App() {
     setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))
+    return id
+  }
+
+  const handleCreateInstrumentTrack = (instrument) => {
+    const id = handleAddTrack()
+    if (!id || !instrument) return
+    handleInstrumentChange(id, instrument)
+  }
+
+  const handleCreateVstTrack = (vstPath) => {
+    const id = handleAddTrack()
+    if (!id || !vstPath) return
+    setTrackVSTMode(prev => ({ ...prev, [id]: true }))
+    setTrackVSTPlugins(prev => ({ ...prev, [String(id)]: vstPath }))
+  }
+
+  const handleCreateSamplerTrack = async (sample) => {
+    const id = handleAddSamplerTrack()
+    if (!id || !sample?.path) return
+    try {
+      const loadRes = await window.api.backend.loadSamplerSample(String(id), sample.path)
+      if (!loadRes.ok) {
+        console.error('Failed to load sample:', loadRes.error)
+        handleDeleteTrack(id)
+        return
+      }
+      setTrackSamplerPaths(prev => ({ ...prev, [id]: sample.path }))
+    } catch (err) {
+      console.error('Failed to load sample:', err)
+      handleDeleteTrack(id)
+    }
   }
 
   // Import audio file(s) as new audio tracks
@@ -1106,15 +1142,45 @@ function App() {
           tracks={tracks}
           selectedTrackId={selectedTrackId}
           onSelectTrack={setSelectedTrackId}
-          onAddTrack={handleAddTrack}
-          onAddBeatTrack={handleAddBeatTrack}
-          onAddSamplerTrack={handleAddSamplerTrack}
+          onOpenAddTrackModal={() => setShowAddTrackModal(true)}
           onDeleteTrack={handleDeleteTrack}
           onRenameTrack={handleRenameTrack}
           onDuplicateTrack={handleDuplicateTrack}
           isRestoring={isRestoring}
           trackAutomation={trackAutomation}
           onAutomationChange={(trackId, automation) => setTrackAutomation(prev => ({ ...prev, [trackId]: automation }))}
+          trackInstruments={trackInstruments}
+          trackVSTMode={trackVSTMode}
+          trackVSTPlugins={trackVSTPlugins}
+          trackVSTLoading={trackVSTLoading}
+          trackSamplerPaths={trackSamplerPaths}
+          onChangeInstrument={(trackId, instrument) => {
+            setTrackVSTMode(prev => ({ ...prev, [trackId]: false }))
+            setTrackVSTPlugins(prev => {
+              const next = { ...prev }
+              delete next[String(trackId)]
+              return next
+            })
+            handleInstrumentChange(trackId, instrument)
+          }}
+          onChangeVst={(trackId, vstPath) => {
+            setTrackVSTMode(prev => ({ ...prev, [trackId]: true }))
+            setTrackVSTPlugins(prev => ({ ...prev, [String(trackId)]: vstPath }))
+          }}
+          onChangeSample={async (trackId) => {
+            try {
+              const res = await window.api?.openSampleFile?.()
+              if (!res || !res.ok || res.canceled) return
+              const loadRes = await window.api.backend.loadSamplerSample(String(trackId), res.path)
+              if (!loadRes.ok) {
+                console.error('Failed to load sample:', loadRes.error)
+                return
+              }
+              setTrackSamplerPaths(prev => ({ ...prev, [trackId]: res.path }))
+            } catch (err) {
+              console.error('Failed to load sample:', err)
+            }
+          }}
         />
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">
           {selectedTrack ? (
@@ -1192,6 +1258,14 @@ function App() {
           )}
         </div>
       </div>
+      <AddTrackModal
+        isOpen={showAddTrackModal}
+        onClose={() => setShowAddTrackModal(false)}
+        onCreateInstrumentTrack={handleCreateInstrumentTrack}
+        onCreateVstTrack={handleCreateVstTrack}
+        onCreateSamplerTrack={handleCreateSamplerTrack}
+        onCreateBeatTrack={handleAddBeatTrack}
+      />
     </div>
   )
 }
