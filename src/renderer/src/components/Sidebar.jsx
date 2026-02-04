@@ -29,6 +29,16 @@ function Sidebar({
   const menuRef = useRef(null)
   const [instrumentPickerTrackId, setInstrumentPickerTrackId] = useState(null)
   const [vstPickerTrackId, setVstPickerTrackId] = useState(null)
+  const [activeTab, setActiveTab] = useState('tracks')
+  const [packsLoading, setPacksLoading] = useState(false)
+  const [packInstruments, setPackInstruments] = useState([])
+  const [sequencerPacks, setSequencerPacks] = useState([])
+  const [sequencerSoundsByPack, setSequencerSoundsByPack] = useState({})
+  const [expandedInstrumentCategory, setExpandedInstrumentCategory] = useState(null)
+  const [expandedSequencerPack, setExpandedSequencerPack] = useState(null)
+  const [loopPacks, setLoopPacks] = useState([])
+  const [loopSoundsByPack, setLoopSoundsByPack] = useState({})
+  const [expandedLoopPack, setExpandedLoopPack] = useState(null)
 
   const handleDoubleClick = (track) => {
     setEditingTrackId(track.id)
@@ -77,6 +87,46 @@ function Sidebar({
     setTimeout(() => setVstPickerTrackId(trackId), 0)
   }
 
+  useEffect(() => {
+    if (activeTab !== 'packs') return
+    let mounted = true
+    const load = async () => {
+      setPacksLoading(true)
+      try {
+        if (!window.api?.getInstruments || !window.api?.sequencer?.listPacks) {
+          setPackInstruments([])
+          setSequencerPacks([])
+          setSequencerSoundsByPack({})
+          setLoopPacks([])
+          setLoopSoundsByPack({})
+          setPacksLoading(false)
+          return
+        }
+        const instruments = await window.api.getInstruments()
+        const packs = await window.api.sequencer.listPacks()
+        const loops = await window.api?.loops?.listPacks?.()
+        if (!mounted) return
+        setPackInstruments(instruments || [])
+        setSequencerPacks(packs || [])
+        setSequencerSoundsByPack({})
+        setLoopPacks(loops || [])
+        setLoopSoundsByPack({})
+      } catch (e) {
+        console.error('Failed to load packs view:', e)
+        if (!mounted) return
+        setPackInstruments([])
+        setSequencerPacks([])
+        setSequencerSoundsByPack({})
+        setLoopPacks([])
+        setLoopSoundsByPack({})
+      } finally {
+        if (mounted) setPacksLoading(false)
+      }
+    }
+    load()
+    return () => { mounted = false }
+  }, [activeTab])
+
   const handleDuplicate = (trackId) => {
     setOpenMenuTrackId(null)
     onDuplicateTrack?.(trackId)
@@ -123,28 +173,45 @@ function Sidebar({
       {/* Header */}
       <div className="p-4 border-b border-zinc-800">
         <div className="flex items-center justify-between">
-          <h2 className="text-white font-semibold text-lg">Tracks</h2>
-          <button
-            onClick={onOpenAddTrackModal}
-            disabled={isRestoring}
-            title="Add track"
-            aria-label="Add track"
-            className="inline-flex items-center justify-center h-8 w-8 rounded-md text-white
-                       bg-zinc-800 hover:bg-zinc-700 ring-1 ring-inset ring-zinc-700
-                       shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors
-                       disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-zinc-800"
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-              <path d="M11 5h2v14h-2z"></path>
-              <path d="M5 11h14v2H5z"></path>
-            </svg>
-          </button>
+          <div className="flex items-center gap-3 text-lg font-semibold">
+            <button
+              onClick={() => setActiveTab('tracks')}
+              className={`transition ${activeTab === 'tracks' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Tracks
+            </button>
+            <span className="text-zinc-600">/</span>
+            <button
+              onClick={() => setActiveTab('packs')}
+              className={`transition ${activeTab === 'packs' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Packs
+            </button>
+          </div>
+          {activeTab === 'tracks' && (
+            <button
+              onClick={onOpenAddTrackModal}
+              disabled={isRestoring}
+              title="Add track"
+              aria-label="Add track"
+              className="inline-flex items-center justify-center h-8 w-8 rounded-md text-white
+                         bg-zinc-800 hover:bg-zinc-700 ring-1 ring-inset ring-zinc-700
+                         shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors
+                         disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-zinc-800"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                <path d="M11 5h2v14h-2z"></path>
+                <path d="M5 11h14v2H5z"></path>
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Track List */}
       <div className="flex-1 overflow-y-auto">
-        {tracks.length === 0 ? (
+        {activeTab === 'tracks' ? (
+          tracks.length === 0 ? (
           <div className="p-4 text-zinc-500 text-sm text-center">
             No tracks yet. Click "Add Track" to get started.
           </div>
@@ -331,13 +398,172 @@ function Sidebar({
               </div>
             ))}
           </div>
+        )
+        ) : (
+          <div className="p-3 space-y-4">
+            {packsLoading ? (
+              <div className="text-zinc-500 text-sm">Loading packs…</div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">SF2 Instruments</div>
+                  <div className="h-3" />
+                  {packInstruments.length === 0 ? (
+                    <div className="text-zinc-500 text-sm">No instruments found.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {Array.from(new Set(packInstruments.map(i => i.folderName || i.category || 'Other'))).map((group) => {
+                        const isExpanded = expandedInstrumentCategory === group
+                        return (
+                          <div key={group}>
+                            <button
+                              onClick={() => setExpandedInstrumentCategory(isExpanded ? null : group)}
+                              className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                                isExpanded
+                                  ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-zinc-900/40 text-amber-100'
+                                  : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800/70'
+                              }`}
+                            >
+                              <span>{group}</span>
+                              <span className="text-zinc-500">{isExpanded ? '−' : '+'}</span>
+                            </button>
+                            {isExpanded && (
+                              <div className="mt-3 flex flex-col gap-1 pl-2">
+                                {packInstruments
+                                  .filter(i => (i.folderName || i.category || 'Other') === group)
+                                  .map((i) => (
+                                    <div
+                                      key={i.samplePath || i.name}
+                                      className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200"
+                                      title={i.samplePath}
+                                    >
+                                      {i.name}
+                                    </div>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <div className="h-3" />
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Sequencer Packs</div>
+                  <div className="h-3" />
+                  {sequencerPacks.length === 0 ? (
+                    <div className="text-zinc-500 text-sm">No packs found.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {sequencerPacks.map((pack) => {
+                        const isExpanded = expandedSequencerPack === pack
+                        const sounds = sequencerSoundsByPack[pack] || []
+                        return (
+                          <div key={pack}>
+                            <button
+                              onClick={async () => {
+                                const next = isExpanded ? null : pack
+                                setExpandedSequencerPack(next)
+                                if (next && !sequencerSoundsByPack[pack]) {
+                                  const list = await window.api?.sequencer?.listSounds?.(pack)
+                                  setSequencerSoundsByPack((prev) => ({ ...prev, [pack]: list || [] }))
+                                }
+                              }}
+                              className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                                isExpanded
+                                  ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-zinc-900/40 text-amber-100'
+                                  : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800/70'
+                              }`}
+                            >
+                              <span>{pack}</span>
+                              <span className="text-zinc-500">{isExpanded ? '−' : '+'}</span>
+                            </button>
+                            {isExpanded && (
+                              <div className="mt-3 flex flex-col gap-1 pl-2">
+                                {(sounds || []).map((s) => (
+                                  <div
+                                    key={`${pack}:${s.fileName}`}
+                                    className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200"
+                                    title={s.filePath}
+                                  >
+                                    {s.name}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <div className="h-3" />
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Loop Packs</div>
+                  <div className="h-3" />
+                  {loopPacks.length === 0 ? (
+                    <div className="text-zinc-500 text-sm">No loop packs found.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {loopPacks.map((pack) => {
+                        const isExpanded = expandedLoopPack === pack
+                        const sounds = loopSoundsByPack[pack] || []
+                        return (
+                          <div key={pack}>
+                            <button
+                              onClick={async () => {
+                                const next = isExpanded ? null : pack
+                                setExpandedLoopPack(next)
+                                if (next && !loopSoundsByPack[pack]) {
+                                  const list = await window.api?.loops?.listSounds?.(pack)
+                                  setLoopSoundsByPack((prev) => ({ ...prev, [pack]: list || [] }))
+                                }
+                              }}
+                              className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                                isExpanded
+                                  ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-zinc-900/40 text-amber-100'
+                                  : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800/70'
+                              }`}
+                            >
+                              <span>{pack}</span>
+                              <span className="text-zinc-500">{isExpanded ? '−' : '+'}</span>
+                            </button>
+                            {isExpanded && (
+                              <div className="mt-3 flex flex-col gap-1 pl-2">
+                                {(sounds || []).map((s) => (
+                                  <div
+                                    key={`${pack}:${s.fileName}`}
+                                    className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200"
+                                    title={s.filePath}
+                                  >
+                                    {s.name}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 
       {/* Footer info */}
       <div className="p-3 border-t border-zinc-800 text-zinc-500 text-xs">
-        <div className="mb-1">Double-click to rename</div>
-        <div>Right-click notes to delete</div>
+        {activeTab === 'tracks' ? (
+          <>
+            <div className="mb-1">Double-click to rename</div>
+            <div>Right-click notes to delete</div>
+          </>
+        ) : (
+          <div>Drag SF2 or WAV files into the app.</div>
+        )}
       </div>
       <InstrumentSelector
         isOpen={instrumentPickerTrackId !== null}

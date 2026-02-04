@@ -20,6 +20,10 @@ const api = {
     listSounds: (pack) => ipcRenderer.invoke('sequencer:listSounds', { pack }),
     openFolder: () => ipcRenderer.invoke('sequencer:openFolder')
   },
+  loops: {
+    listPacks: () => ipcRenderer.invoke('loops:listPacks'),
+    listSounds: (pack) => ipcRenderer.invoke('loops:listSounds', { pack })
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),

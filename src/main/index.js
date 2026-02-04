@@ -741,6 +741,52 @@ app.whenReady().then(() => {
     }
   })
 
+  // IPC: list available loop packs under resources/Loop Packs
+  ipcMain.handle('loops:listPacks', async () => {
+    try {
+      const loopsDir = path.join(resolveResourcesRoot(), 'Loop Packs')
+      if (!fs.existsSync(loopsDir)) return []
+      return fs
+        .readdirSync(loopsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    } catch (e) {
+      console.error('loops:listPacks error', e)
+      return []
+    }
+  })
+
+  // IPC: list available loop files under resources/Loop Packs/<pack>
+  ipcMain.handle('loops:listSounds', async (event, opts = {}) => {
+    try {
+      const loopsDir = path.join(resolveResourcesRoot(), 'Loop Packs')
+      if (!fs.existsSync(loopsDir)) return []
+      const packName = typeof opts?.pack === 'string' && opts.pack.trim() ? opts.pack.trim() : null
+      if (!packName) return []
+      const baseDir = path.join(loopsDir, packName)
+      if (!fs.existsSync(baseDir)) return []
+      const files = fs.readdirSync(baseDir, { withFileTypes: true })
+      return files
+        .filter((f) => f.isFile())
+        .filter((f) => /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
+        .map((f) => {
+          const filePath = path.join(baseDir, f.name)
+          const fileUrl = pathToFileURL(filePath).href
+          const baseName = f.name.replace(/\.(wav|mp3|ogg|flac|m4a|aac)$/i, '')
+          return {
+            name: baseName,
+            fileName: f.name,
+            filePath,
+            fileUrl,
+            pack: packName
+          }
+        })
+    } catch (e) {
+      console.error('loops:listSounds error', e)
+      return []
+    }
+  })
+
   // IPC: list available drum sounds under resources/Sequencer (optionally within a pack)
   ipcMain.handle('sequencer:listSounds', async (event, opts = {}) => {
     try {
