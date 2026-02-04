@@ -120,7 +120,7 @@ function App() {
   }
 
   // Add new beat (drum) track and open sequencer editor
-  const handleAddBeatTrack = () => {
+  const handleAddBeatTrack = (packName = '') => {
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const id = Date.now()
     const newTrack = {
@@ -132,7 +132,7 @@ function App() {
     }
     setTracks((prev) => [...prev, newTrack])
     setTrackVolumes((prev) => ({ ...prev, [id]: 100 }))
-    setTrackBeats((prev) => ({ ...prev, [id]: { steps: 16, rows: [] } }))
+    setTrackBeats((prev) => ({ ...prev, [id]: { steps: 16, rows: [], packName } }))
     setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))

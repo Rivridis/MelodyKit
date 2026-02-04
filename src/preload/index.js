@@ -16,7 +16,8 @@ const api = {
   openAudioFiles: () => ipcRenderer.invoke('audio:open'),
   openSampleFile: () => ipcRenderer.invoke('audio:open-sample'),
   sequencer: {
-    listSounds: () => ipcRenderer.invoke('sequencer:listSounds'),
+    listPacks: () => ipcRenderer.invoke('sequencer:listPacks'),
+    listSounds: (pack) => ipcRenderer.invoke('sequencer:listSounds', { pack }),
     openFolder: () => ipcRenderer.invoke('sequencer:openFolder')
   },
   window: {

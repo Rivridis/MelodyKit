@@ -16,6 +16,8 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
   const [selectedSample, setSelectedSample] = useState(null)
   const [showInstrumentSelector, setShowInstrumentSelector] = useState(false)
   const [showVstSelector, setShowVstSelector] = useState(false)
+  const [beatPacks, setBeatPacks] = useState([])
+  const [selectedBeatPack, setSelectedBeatPack] = useState('')
 
   useEffect(() => {
     if (!isOpen) return
@@ -25,14 +27,22 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
     setSelectedSample(null)
     setShowInstrumentSelector(false)
     setShowVstSelector(false)
+    ;(async () => {
+      try {
+        const packs = await window.api?.sequencer?.listPacks?.()
+        if (Array.isArray(packs)) {
+          setBeatPacks(packs)
+          setSelectedBeatPack(packs[0] || '')
+        }
+      } catch (err) {
+        console.error('Failed to load beat packs:', err)
+        setBeatPacks([])
+        setSelectedBeatPack('')
+      }
+    })()
   }, [isOpen])
 
   if (!isOpen) return null
-
-  const handleBeatClick = () => {
-    onCreateBeatTrack?.()
-    onClose?.()
-  }
 
   const handleChooseSample = async () => {
     try {
@@ -47,7 +57,8 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
   const canCreate =
     (selectedType === 'instrument' && !!selectedInstrument) ||
     (selectedType === 'vst' && !!selectedVstPath) ||
-    (selectedType === 'sampler' && !!selectedSample)
+    (selectedType === 'sampler' && !!selectedSample) ||
+    (selectedType === 'beat' && !!selectedBeatPack)
 
   const handleCreate = () => {
     if (selectedType === 'instrument' && selectedInstrument) {
@@ -62,6 +73,11 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
     }
     if (selectedType === 'sampler' && selectedSample) {
       onCreateSamplerTrack?.(selectedSample)
+      onClose?.()
+      return
+    }
+    if (selectedType === 'beat' && selectedBeatPack) {
+      onCreateBeatTrack?.(selectedBeatPack)
       onClose?.()
     }
   }
@@ -101,10 +117,6 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
               <button
                 key={type.id}
                 onClick={() => {
-                  if (type.id === 'beat') {
-                    handleBeatClick()
-                    return
-                  }
                   setSelectedType(type.id)
                 }}
                 className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${
@@ -121,7 +133,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
                   <div className="text-xs text-zinc-400">{type.desc}</div>
                 </div>
                 {type.id === 'beat' && (
-                  <span className="ml-auto text-xs text-amber-200/80">Add now</span>
+                  <span className="ml-auto text-xs text-amber-200/80">Select pack</span>
                 )}
               </button>
             ))}
@@ -201,21 +213,31 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
               <div className="space-y-4">
                 <div>
                   <h3 className="text-lg font-semibold text-white">Beat Track</h3>
-                  <p className="text-sm text-zinc-400">Beat tracks add immediately.</p>
+                  <p className="text-sm text-zinc-400">Choose a sequencer pack to start from.</p>
                 </div>
-                <button
-                  onClick={handleBeatClick}
-                  className="inline-flex items-center gap-2 rounded-lg bg-amber-500/20 px-4 py-2 text-sm font-semibold text-amber-100 ring-1 ring-amber-400/40 hover:bg-amber-500/30"
-                >
-                  Add Beat Track
-                </button>
+                <div className="rounded-lg border border-zinc-700/60 bg-zinc-950/40 p-4">
+                  <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Pack</div>
+                  <select
+                    value={selectedBeatPack}
+                    onChange={(e) => setSelectedBeatPack(e.target.value)}
+                    className="mt-2 w-full h-10 rounded-md bg-zinc-900 text-zinc-100 border border-zinc-700 px-2"
+                  >
+                    {beatPacks.length === 0 ? (
+                      <option value="">No packs found</option>
+                    ) : (
+                      beatPacks.map((pack) => (
+                        <option key={pack} value={pack}>{pack}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
               </div>
             )}
           </div>
         </div>
 
         <div className="flex items-center justify-between border-t border-zinc-700/70 px-6 py-4">
-          <div className="text-xs text-zinc-500">Beat tracks add instantly. Other tracks require a selection.</div>
+          <div className="text-xs text-zinc-500">Choose a beat pack to create a beat track.</div>
           <div className="flex gap-2">
             <button
               onClick={onClose}

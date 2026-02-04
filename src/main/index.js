@@ -726,26 +726,73 @@ app.whenReady().then(() => {
     }
   })
 
-  // IPC: list available drum sounds under resources/Sequencer
-  ipcMain.handle('sequencer:listSounds', async () => {
+  // IPC: list available sequencer packs under resources/Sequencer
+  ipcMain.handle('sequencer:listPacks', async () => {
+    try {
+      const seqDir = path.join(resolveResourcesRoot(), 'Sequencer')
+      if (!fs.existsSync(seqDir)) return []
+      return fs
+        .readdirSync(seqDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    } catch (e) {
+      console.error('sequencer:listPacks error', e)
+      return []
+    }
+  })
+
+  // IPC: list available drum sounds under resources/Sequencer (optionally within a pack)
+  ipcMain.handle('sequencer:listSounds', async (event, opts = {}) => {
     try {
       const seqDir = path.join(resolveResourcesRoot(), 'Sequencer')
 
       if (!fs.existsSync(seqDir)) return []
 
-      const files = fs.readdirSync(seqDir, { withFileTypes: true })
+      const packName = typeof opts?.pack === 'string' && opts.pack.trim() ? opts.pack.trim() : null
+      const baseDir = packName ? path.join(seqDir, packName) : seqDir
+      if (!fs.existsSync(baseDir)) return []
+
+      const entries = fs.readdirSync(baseDir, { withFileTypes: true })
+      const files = entries.filter((f) => f.isFile())
+
+      // If no files at root and no pack specified, try first available pack
+      if (!packName && files.length === 0) {
+        const packs = entries.filter((f) => f.isDirectory()).map((f) => f.name)
+        if (packs.length > 0) {
+          const fallbackDir = path.join(seqDir, packs[0])
+          if (fs.existsSync(fallbackDir)) {
+            const fallbackFiles = fs.readdirSync(fallbackDir, { withFileTypes: true })
+            return fallbackFiles
+              .filter((f) => f.isFile())
+              .filter((f) => /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
+              .map((f) => {
+                const filePath = path.join(fallbackDir, f.name)
+                const fileUrl = pathToFileURL(filePath).href
+                const baseName = f.name.replace(/\.(wav|mp3|ogg|flac|m4a|aac)$/i, '')
+                return {
+                  name: baseName,
+                  fileName: f.name,
+                  filePath,
+                  fileUrl,
+                  pack: packs[0]
+                }
+              })
+          }
+        }
+      }
+
       const sounds = []
       for (const f of files) {
-        if (!f.isFile()) continue
         if (!/\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name)) continue
-        const filePath = path.join(seqDir, f.name)
+        const filePath = path.join(baseDir, f.name)
         const fileUrl = pathToFileURL(filePath).href
         const baseName = f.name.replace(/\.(wav|mp3|ogg|flac|m4a|aac)$/i, '')
         sounds.push({
           name: baseName,
           fileName: f.name,
           filePath,
-          fileUrl
+          fileUrl,
+          pack: packName
         })
       }
       return sounds

@@ -64,7 +64,7 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
     let mounted = true
     const load = async () => {
       try {
-        const list = await window.api?.sequencer?.listSounds?.()
+        const list = await window.api?.sequencer?.listSounds?.(local?.packName)
         if (mounted && Array.isArray(list)) setAvailable(list)
       } catch (e) {
         console.error('Failed to list sequencer sounds', e)
@@ -72,7 +72,7 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
     }
     load()
     return () => { mounted = false }
-  }, [])
+  }, [local?.packName])
 
   const stepsCount = local.steps
   const stepsIdx = useMemo(() => Array.from({ length: stepsCount }, (_, i) => i), [stepsCount])
@@ -250,7 +250,8 @@ function normalizePattern(p) {
     steps: resizeBooleanArray(r.steps || [], steps)
   })) : []
   const lengthBeats = typeof p?.lengthBeats === 'number' ? p.lengthBeats : undefined
-  return { steps, rows, lengthBeats }
+  const packName = typeof p?.packName === 'string' ? p.packName : ''
+  return { steps, rows, lengthBeats, packName }
 }
 
 function resizeBooleanArray(arr, size) {
