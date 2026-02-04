@@ -201,11 +201,13 @@ function Sidebar({
                             await openVSTEditor(track.id)
                           }}
                           title="Open VST editor"
-                          className={`h-9 w-9 rounded-md border border-zinc-700/70 bg-zinc-900/60 text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800/70 ${
+                          className={`h-9 w-9 rounded-md border border-zinc-700/70 bg-zinc-900/60 text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800/70 flex items-center justify-center ${
                             trackVSTLoading?.[track.id] ? 'opacity-60 cursor-wait' : ''
                           }`}
                         >
-                          <span className="text-xs font-semibold">E</span>
+                          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                            <path d="M5 3h2v18H5zM4 7h4v2H4zM11 3h2v18h-2zM10 11h4v2h-4zM17 3h2v18h-2zM16 5h4v2h-4z"></path>
+                          </svg>
                         </button>
                       </div>
                     ) : (

@@ -140,10 +140,10 @@ function InstrumentSelector({ isOpen, onClose, onSelectInstrument, currentInstru
                     <button
                       key={category}
                       onClick={() => handleCategoryClick(category)}
-                      className="group relative p-6 rounded-xl transition-all duration-200 flex flex-col items-center gap-3 bg-zinc-800/80 hover:bg-zinc-700/80 cursor-pointer hover:scale-105"
+                      className="group relative p-6 rounded-xl flex flex-col items-center gap-3 bg-zinc-800/80 hover:bg-zinc-700/80 cursor-pointer"
                     >
                       {/* Icon */}
-                      <div className="text-5xl transition-transform group-hover:scale-110">
+                      <div className="text-5xl">
                         {icon}
                       </div>
 
@@ -179,9 +179,9 @@ function InstrumentSelector({ isOpen, onClose, onSelectInstrument, currentInstru
                     }
                     onClick={() => handleInstrumentClick(instrument)}
                     disabled={isLoadingInstrument}
-                    className={`group relative p-6 rounded-xl transition-all duration-200 flex flex-col items-center gap-3 ${
+                    className={`group relative p-6 rounded-xl flex flex-col items-center gap-3 ${
                       currentInstrument?.name === instrument.name
-                        ? 'bg-amber-600 shadow-lg shadow-amber-500/40 scale-105'
+                        ? 'bg-amber-600 shadow-lg shadow-amber-500/40'
                         : 'bg-zinc-800/80 hover:bg-zinc-700/80'
                     } ${isLoadingInstrument ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
                   >
@@ -200,7 +200,7 @@ function InstrumentSelector({ isOpen, onClose, onSelectInstrument, currentInstru
                     )}
 
                     {/* Icon */}
-                    <div className="text-5xl transition-transform">
+                    <div className="text-5xl">
                       {instrument.icon}
                     </div>
 
