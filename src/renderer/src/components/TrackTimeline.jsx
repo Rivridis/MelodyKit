@@ -84,6 +84,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const scrollContainerRef = useRef(null)
   const audioContextRef = useRef(null)
   const [audioReady, setAudioReady] = useState(false)
+  const [audioClipsVersion, setAudioClipsVersion] = useState(0)
   const playbackIntervalRef = useRef(null)
   const animationFrameRef = useRef(null)
   const currentBeatRef = useRef(0)
@@ -211,6 +212,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     // Otherwise, track is audible (not muted and nothing soloed)
     return true
   }
+
+  const isAudioClipLoading = (() => {
+    if (!tracks || tracks.length === 0) return false
+    const ctx = audioContextRef.current
+    return tracks.some((t) => {
+      if (t.type !== 'audio' || !t.audioClip) return false
+      const rec = loadedAudioClipsRef.current?.[t.id]
+      if (!ctx) return true
+      return !rec?.buffer || rec?.context !== ctx
+    })
+  })()
 
   // Calculate beat width based on zoom level
   const beatWidth = BEAT_WIDTH * zoom
@@ -548,6 +560,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const ab = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength)
               const buffer = await ctx.decodeAudioData(ab)
               loadedAudioClipsRef.current[t.id] = { buffer, context: ctx }
+              setAudioClipsVersion((v) => v + 1)
               const trackOffset = typeof trackOffsets?.[t.id] === 'number' ? trackOffsets[t.id] : 0
               const loopBeats = getAudioLoopBeats(t.id, buffer, bpm)
               maxNeededBeats = Math.max(maxNeededBeats, trackOffset + loopBeats)
@@ -989,6 +1002,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     tracks.forEach((track, index) => {
       const y = index * TRACK_HEIGHT
       const isHovered = hoveredTrack === index
+      const isAudioLoadingTrack = track.type === 'audio' && track.audioClip && (() => {
+        const rec = loadedAudioClipsRef.current?.[track.id]
+        if (!audioContextRef.current) return true
+        return !rec?.buffer || rec?.context !== audioContextRef.current
+      })()
       
       // Track background
       ctx.fillStyle = '#27272a'
@@ -1001,6 +1019,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       // Hover effect
       if (isHovered) {
         ctx.fillStyle = 'rgba(63, 63, 70, 0.3)'
+        ctx.fillRect(0, y, CANVAS_WIDTH, TRACK_HEIGHT)
+      }
+
+      if (isAudioLoadingTrack) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.18)'
         ctx.fillRect(0, y, CANVAS_WIDTH, TRACK_HEIGHT)
       }
       
@@ -1045,6 +1068,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       
       // Draw region: for MIDI tracks use notes; for audio tracks use clip duration; for beat tracks use adjustable loop length
       let region = null
+      let isPlaceholderRegion = false
       let trackOffset = typeof trackOffsets?.[track.id] === 'number' ? trackOffsets[track.id] : 0
       
       if (track.type === 'audio') {
@@ -1060,6 +1084,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             trackOffset = dragging.currentBeat
           }
           region = { start: trackOffset, duration: beats, end: trackOffset + beats }
+        } else if (track.audioClip) {
+          // Placeholder region while audio is still decoding
+          let beats = typeof trackLengths?.[track.id] === 'number' ? Math.max(1, trackLengths[track.id]) : 8
+          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
+            beats = Math.max(1, resizing.currentLen)
+          }
+          if (dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number') {
+            trackOffset = dragging.currentBeat
+          }
+          region = { start: trackOffset, duration: beats, end: trackOffset + beats }
+          isPlaceholderRegion = true
         }
       } else if (track.type === 'beat') {
         const p = trackBeats?.[track.id]
@@ -1122,14 +1157,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         gradient.addColorStop(0, baseColor + (isRegionHovered ? 'DD' : 'CC'))
         gradient.addColorStop(1, baseColor + (isRegionHovered ? 'AA' : '99'))
         ctx.fillStyle = gradient
+        const prevAlpha = ctx.globalAlpha
+        if (isPlaceholderRegion) ctx.globalAlpha = 0.6
         ctx.beginPath()
         ctx.roundRect(regionX, regionY, regionWidth, regionHeight, 6)
         ctx.fill()
         
         // Region border
-        ctx.strokeStyle = isRegionHovered ? '#ffffff' : track.color
+        ctx.strokeStyle = isPlaceholderRegion ? '#d4d4d8' : (isRegionHovered ? '#ffffff' : track.color)
         ctx.lineWidth = isRegionHovered ? 3 : 2
         ctx.stroke()
+        ctx.globalAlpha = prevAlpha
         
         // Region name/label
         ctx.fillStyle = '#ffffff'
@@ -1141,24 +1179,28 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         ctx.beginPath()
         ctx.rect(regionX, regionY, regionWidth, regionHeight)
         ctx.clip()
-        const regionLabel = track.type === 'audio' ? (track.audioClip?.name || 'Audio') : track.name
+        const regionLabel = isPlaceholderRegion
+          ? `Loading ${track.audioClip?.name || 'audio'}...`
+          : (track.type === 'audio' ? (track.audioClip?.name || 'Audio') : track.name)
         ctx.fillText(regionLabel, regionX + labelPadding, regionY + labelPadding)
         ctx.restore()
         
         // Waveform-like visualization (simplified)
-        ctx.strokeStyle = '#ffffff66'
-        ctx.lineWidth = 1
-        const waveY = regionY + regionHeight / 2
-        for (let i = 0; i < regionWidth - 4; i += 3) {
-          const amplitude = (Math.sin(i * 0.1) * 0.3 + 0.7) * (regionHeight * 0.3)
-          ctx.beginPath()
-          ctx.moveTo(regionX + labelPadding + i, waveY - amplitude / 2)
-          ctx.lineTo(regionX + labelPadding + i, waveY + amplitude / 2)
-          ctx.stroke()
+        if (!isPlaceholderRegion) {
+          ctx.strokeStyle = '#ffffff66'
+          ctx.lineWidth = 1
+          const waveY = regionY + regionHeight / 2
+          for (let i = 0; i < regionWidth - 4; i += 3) {
+            const amplitude = (Math.sin(i * 0.1) * 0.3 + 0.7) * (regionHeight * 0.3)
+            ctx.beginPath()
+            ctx.moveTo(regionX + labelPadding + i, waveY - amplitude / 2)
+            ctx.lineTo(regionX + labelPadding + i, waveY + amplitude / 2)
+            ctx.stroke()
+          }
         }
 
         // Audio loop seams (clip boundaries within extended region)
-        if (track.type === 'audio') {
+        if (track.type === 'audio' && !isPlaceholderRegion) {
           const rec = loadedAudioClipsRef.current?.[track.id]
           const clipBeats = rec?.buffer ? (rec.buffer.duration * bpm) / 60 : 0
           if (clipBeats > 0 && regionWidth > clipBeats * beatWidth) {
@@ -1193,7 +1235,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       ctx.lineTo(CANVAS_WIDTH, y + TRACK_HEIGHT)
       ctx.stroke()
     })
-  }, [tracks, trackNotes, trackBeats, trackOffsets, gridWidth, hoveredTrack, beatWidth, resizing, dragging])
+  }, [tracks, trackNotes, trackBeats, trackOffsets, gridWidth, hoveredTrack, beatWidth, resizing, dragging, audioClipsVersion])
 
   // Play a note with per-track instrument support
   const playNote = (trackId, noteName, duration = 0.3, currentBeat = null) => {
@@ -1321,8 +1363,8 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
   // Playback all tracks
   const togglePlayback = (startBeatOverride) => {
-    // Prevent toggling playback while recording/exporting, restoring VSTs, or when there are no tracks
-    if (isRecording || isRestoring) return
+    // Prevent toggling playback while recording/exporting, restoring VSTs, audio loading, or when there are no tracks
+    if (isRecording || isRestoring || isAudioClipLoading) return
     if (!tracks || tracks.length === 0) return
     if (isPlaying) {
       isPlayingRef.current = false
@@ -2631,9 +2673,21 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
           <button
             onClick={togglePlayback}
-            disabled={isRecording || isRestoring || tracks.length === 0}
-            title={isRestoring ? 'Loading VST presets...' : (isPlaying ? 'Pause' : 'Play')}
-            aria-label={isRestoring ? 'Loading VST presets' : (isPlaying ? 'Pause' : 'Play')}
+            disabled={isRecording || isRestoring || isAudioClipLoading || tracks.length === 0}
+            title={
+              isRestoring
+                ? 'Loading VST presets...'
+                : isAudioClipLoading
+                  ? 'Audio clips loading...'
+                  : (isPlaying ? 'Pause' : 'Play')
+            }
+            aria-label={
+              isRestoring
+                ? 'Loading VST presets'
+                : isAudioClipLoading
+                  ? 'Audio clips loading'
+                  : (isPlaying ? 'Pause' : 'Play')
+            }
             className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed text-white shadow focus:outline-none focus:ring-2 focus:ring-amber-500/60"
           >
             {isPlaying ? (
