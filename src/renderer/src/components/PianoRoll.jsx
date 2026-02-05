@@ -680,35 +680,47 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const sc = scrollContainerRef.current
+    const canvasWidth = gridWidth * BEAT_WIDTH + 80
     const vLeft = sc ? sc.scrollLeft : 0
-    const vWidth = sc ? sc.clientWidth : (gridWidth * BEAT_WIDTH + 80)
+    const vWidth = sc ? sc.clientWidth : canvasWidth
     const vx1 = Math.max(0, vLeft)
-    const vx2 = Math.min(gridWidth * BEAT_WIDTH + 80, vLeft + vWidth)
+    const vx2 = Math.min(canvasWidth, vLeft + vWidth)
     const vw = Math.max(0, vx2 - vx1)
     if (vw <= 0) return
 
-    // Clear entire canvas
-    ctx.clearRect(0, 0, gridWidth * BEAT_WIDTH + 80, CANVAS_HEIGHT)
+    // Draw only the visible region (+ small margin) to keep scrolling smooth
+    const marginPx = BEAT_WIDTH
+    const drawLeft = Math.max(0, vx1 - marginPx)
+    const drawRight = Math.min(canvasWidth, vx2 + marginPx)
+    const drawWidth = Math.max(0, drawRight - drawLeft)
+    if (drawWidth <= 0) return
+
+    // Clear only the visible slice (with margin)
+    ctx.clearRect(drawLeft, 0, drawWidth, CANVAS_HEIGHT)
 
     // Determine visible beats range (+ small margin)
-    const startBeat = Math.max(0, (vx1 - 80) / BEAT_WIDTH) - 1
-    const endBeat = Math.min(gridWidth, (vx2 - 80) / BEAT_WIDTH) + 1
+    const startBeat = Math.max(0, (drawLeft - 80) / BEAT_WIDTH) - 1
+    const endBeat = Math.min(gridWidth, (drawRight - 80) / BEAT_WIDTH) + 1
     const startI = Math.max(0, Math.floor(startBeat))
     const endI = Math.min(gridWidth, Math.ceil(endBeat))
 
     // Row backgrounds - draw full width from keys area using batch operation
     ctx.save()
+    const rowStartX = Math.max(80, drawLeft)
+    const rowWidth = Math.max(0, drawRight - rowStartX)
+    if (rowWidth > 0) {
     for (let i = 0; i < pianoNotes.length; i++) {
       const isBlack = pianoNotes[i].includes('#')
       ctx.fillStyle = isBlack ? '#23272e' : '#2d2f36'
-      ctx.fillRect(80, i * NOTE_HEIGHT, gridWidth * BEAT_WIDTH, NOTE_HEIGHT)
+        ctx.fillRect(rowStartX, i * NOTE_HEIGHT, rowWidth, NOTE_HEIGHT)
+    }
     }
     ctx.restore()
 
     // PERFORMANCE: Batch vertical grid lines (beats) to reduce draw calls
     ctx.save()
     ctx.beginPath()
-    for (let i = 0; i <= gridWidth; i++) {
+    for (let i = startI; i <= endI; i++) {
       const x = 80 + i * BEAT_WIDTH
       const isBarLine = i % 4 === 0
       if (isBarLine) {
@@ -721,7 +733,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     }
     ctx.stroke()
     ctx.beginPath()
-    for (let i = 0; i <= gridWidth; i++) {
+    for (let i = startI; i <= endI; i++) {
       const x = 80 + i * BEAT_WIDTH
       const isBarLine = i % 4 === 0
       if (!isBarLine) {
@@ -739,7 +751,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     ctx.save()
     ctx.beginPath()
     const subdivisionsPerBeat = gridDivision / 4
-    for (let i = 0; i < gridWidth; i++) {
+    for (let i = startI; i < endI; i++) {
       const baseX = 80 + i * BEAT_WIDTH
       for (let j = 1; j < subdivisionsPerBeat; j++) {
         const x = baseX + (j * BEAT_WIDTH / subdivisionsPerBeat)
@@ -752,7 +764,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     ctx.stroke()
     ctx.restore()
 
-    // Draw all notes (culling removed to fix scrolling visibility)
+    // Draw notes within the visible slice (with margin)
     const hiddenSet = new Set(hiddenNoteIds)
     const selSet = new Set(selectedNoteIds)
     for (let i = 0; i < notes.length; i++) {
@@ -762,6 +774,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
       if (idx === -1 || idx === undefined) continue
       const noteStartX = 80 + n.start * BEAT_WIDTH
       const noteEndX = noteStartX + n.duration * BEAT_WIDTH
+      if (noteEndX < drawLeft || noteStartX > drawRight) continue
       const y = idx * NOTE_HEIGHT
       const isSelected = selSet.has(n.id)
       const colorWithOpacity = isSelected ? trackColor + 'FF' : trackColor + 'E8'
