@@ -569,7 +569,7 @@ function Sidebar({
             <div>Right-click notes to delete</div>
           </>
         ) : (
-          <div>Drag SF2 or WAV files into the app.</div>
+          <div>Click to add a track or audio.</div>
         )}
       </div>
       <InstrumentSelector
