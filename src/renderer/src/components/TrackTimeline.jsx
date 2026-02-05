@@ -10,7 +10,7 @@ const TRACK_HEIGHT = 80
 const TIMELINE_HEIGHT = 30
 const SIDEBAR_WIDTH = 180
 const INITIAL_GRID_WIDTH = 32
-const EXTEND_AMOUNT = 16
+const AUTO_EXPAND_PADDING_BEATS = 16
 // Draw text with ellipsis if it exceeds maxWidth
 function drawEllipsizedText(ctx, text, x, y, maxWidth) {
   if (!text) return
@@ -65,7 +65,7 @@ function calculateRegion(notes) {
 
 const sharedAudioClipCache = {}
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -217,6 +217,33 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   const beatWidthRef = useRef(beatWidth)
   useEffect(() => { beatWidthRef.current = beatWidth }, [beatWidth])
 
+  // Auto-reduce zoom to keep newly-extended timelines reasonably in view
+  useEffect(() => {
+    if (!setZoom) return
+    if (autoZoomLocked) return
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    const update = () => {
+      const available = container.clientWidth || 0
+      if (!available) return
+      const usable = Math.max(0, available - SIDEBAR_WIDTH)
+      if (usable <= 0) return
+      const fitZoom = usable / (gridWidth * BEAT_WIDTH)
+      const clamped = Math.max(0.5, Math.min(1, fitZoom))
+      if (clamped < zoom - 0.001) {
+        setZoom((z) => (clamped < z ? clamped : z))
+      }
+    }
+
+    update()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null
+    if (ro) ro.observe(container)
+    return () => {
+      if (ro) ro.disconnect()
+    }
+  }, [gridWidth, zoom, setZoom, autoZoomLocked])
+
   useEffect(() => {
     // Use shared AudioContext across views
     audioContextRef.current = getSharedAudioContext()
@@ -323,6 +350,55 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   useEffect(() => { loopStartRef.current = loopStart }, [loopStart])
   useEffect(() => { loopEndRef.current = loopEnd }, [loopEnd])
   useEffect(() => { trackAutomationRef.current = trackAutomation }, [trackAutomation])
+
+  // Auto-expand timeline when notes extend beyond the current grid (Logic/GarageBand style)
+  useEffect(() => {
+    if (!setGridWidth) return
+    let maxEndBeat = 0
+    const notesByTrack = trackNotes || {}
+
+    tracks.forEach((track) => {
+      const trackId = track.id
+      const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+
+      if (track.type === 'audio') {
+        const rec = loadedAudioClipsRef.current?.[trackId]
+        if (rec?.buffer) {
+          const loopBeats = getAudioLoopBeats(trackId, rec.buffer, bpm)
+          maxEndBeat = Math.max(maxEndBeat, trackOffset + loopBeats)
+        }
+        return
+      }
+
+      if (track.type === 'beat') {
+        const pattern = trackBeats?.[trackId]
+        const defaultBeats = 4
+        const beats = typeof pattern?.lengthBeats === 'number' ? Math.max(4, pattern.lengthBeats) : defaultBeats
+        maxEndBeat = Math.max(maxEndBeat, trackOffset + beats)
+        return
+      }
+
+      const notes = notesByTrack[trackId] || []
+      let lastNoteEnd = 0
+      if (notes.length > 0) {
+        lastNoteEnd = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
+      }
+
+      const manualLen = typeof trackLengths?.[trackId] === 'number' ? trackLengths[trackId] : 0
+      const trackEnd = Math.max(lastNoteEnd, manualLen)
+      if (trackEnd > 0) {
+        maxEndBeat = Math.max(maxEndBeat, trackOffset + trackEnd)
+      }
+    })
+
+    if (maxEndBeat <= 0) return
+
+    const padded = maxEndBeat + AUTO_EXPAND_PADDING_BEATS // add 4 bars of breathing room
+    const rounded = Math.ceil(padded / 4) * 4
+    if (rounded > gridWidth) {
+      setGridWidth((gw) => (rounded > gw ? rounded : gw))
+    }
+  }, [tracks, trackNotes, trackBeats, trackOffsets, trackLengths, bpm, gridWidth, setGridWidth])
   
   // Handle BPM changes during playback
   useEffect(() => {
@@ -496,10 +572,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           delete loadedAudioClipsRef.current[id]
         }
       })
-      if (maxNeededBeats > gridWidth) {
-        const next = Math.ceil(maxNeededBeats + 4)
-        setGridWidth?.((gw) => (next > gw ? next : gw))
-      }
+        if (maxNeededBeats > gridWidth) {
+          const next = Math.ceil(maxNeededBeats + AUTO_EXPAND_PADDING_BEATS)
+          setGridWidth?.((gw) => (next > gw ? next : gw))
+        }
       if (needsDecode) {
         onAudioDecodeDone?.()
       }
@@ -2275,18 +2351,6 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     }
   }
 
-  const handleExtend = () => {
-    setGridWidth(gw => gw + EXTEND_AMOUNT)
-  }
-
-  const handleZoomIn = () => {
-    setZoom(z => Math.min(2, z + 0.25))
-  }
-
-  const handleZoomOut = () => {
-    setZoom(z => Math.max(0.5, z - 0.25))
-  }
-
   // Rewind to start (GarageBand-style): move cursor to 0; if playing, restart from beginning
   const handleRewind = () => {
     if (isRecording) return
@@ -2486,6 +2550,18 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (!container) return
 
     const onWheel = (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault()
+        setAutoZoomLocked?.(true)
+        const minZoom = 0.25
+        const maxZoom = 2
+        const delta = -e.deltaY * 0.0015
+        setZoom?.((z) => {
+          const next = Math.max(minZoom, Math.min(maxZoom, z + delta))
+          return next
+        })
+        return
+      }
       const verticalOverflow = container.scrollHeight > container.clientHeight + 1
       const horizontalOverflow = container.scrollWidth > container.clientWidth + 1
       if (!horizontalOverflow) return
@@ -2500,7 +2576,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
     container.addEventListener('wheel', onWheel, { passive: false })
     return () => container.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [setZoom, setAutoZoomLocked])
 
   return (
     <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-zinc-900">
@@ -2647,36 +2723,6 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             className="h-9 w-16 px-2 bg-zinc-800 text-white rounded-md border border-zinc-700 focus:border-amber-500 focus:outline-none text-sm"
           />
         </div>
-
-        {/* Zoom */}
-        <div className="ml-1 flex items-center gap-1 px-1.5 py-1 bg-zinc-800 rounded-md ring-1 ring-inset ring-zinc-700">
-          <button
-            onClick={handleZoomOut}
-            disabled={zoom <= 0.5}
-            className="inline-flex items-center justify-center w-7 h-7 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-900 disabled:text-zinc-600 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-semibold"
-            title="Zoom Out"
-          >
-            −
-          </button>
-          <span className="text-zinc-400 text-xs w-12 text-center">{Math.round(zoom * 100)}%</span>
-          <button
-            onClick={handleZoomIn}
-            disabled={zoom >= 2}
-            className="inline-flex items-center justify-center w-7 h-7 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-900 disabled:text-zinc-600 disabled:cursor-not-allowed text-white rounded-md transition-colors text-sm font-semibold"
-            title="Zoom In"
-          >
-            +
-          </button>
-        </div>
-
-        {/* Extend bars */}
-        <button
-          onClick={handleExtend}
-          className="inline-flex items-center justify-center h-9 px-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-md transition-colors ring-1 ring-inset ring-zinc-700 text-sm"
-          title={`Extend ${EXTEND_AMOUNT} bars`}
-        >
-          + {EXTEND_AMOUNT} bars
-        </button>
 
         {/* Track count */}
         <div className="ml-1 text-zinc-400 text-xs select-none">

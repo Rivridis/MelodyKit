@@ -57,7 +57,8 @@ function App() {
   const [trackSoloed, setTrackSoloed] = useState({}) // { trackId: boolean } - track solo status
   const [trackAutomation, setTrackAutomation] = useState({}) // { trackId: { enabled: boolean, type: 'volume'|'pan'|'resonance'|'cutoff', data: { volume: [{beat, value}], pan: [...], resonance: [...], cutoff: [...] } } }
   const [gridWidth, setGridWidth] = useState(32) // Shared grid width state
-  const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.5 to 2)
+  const [zoom, setZoom] = useState(1) // Zoom level for timeline (0.25 to 2)
+  const [autoZoomLocked, setAutoZoomLocked] = useState(false)
   const [bpm, setBpm] = useState(120) // Global BPM for playback
   const [loopStart, setLoopStart] = useState(null) // Loop region start (in beats), null = no loop
   const [loopEnd, setLoopEnd] = useState(null) // Loop region end (in beats), null = no loop
@@ -817,6 +818,7 @@ function App() {
       const nextBpm = typeof p.bpm === 'number' ? p.bpm : 120
       const nextGrid = typeof p.gridWidth === 'number' ? p.gridWidth : 32
       const nextZoom = typeof p.zoom === 'number' ? p.zoom : 1
+      setAutoZoomLocked(false)
       const nextLoopStart = typeof p.loopStart === 'number' ? p.loopStart : null
       const nextLoopEnd = typeof p.loopEnd === 'number' ? p.loopEnd : null
       const nextTracks = Array.isArray(p.tracks) ? p.tracks.map(t => ({
@@ -1148,6 +1150,7 @@ function App() {
           setSelectedTrackId(null)
           setCurrentProjectPath(null)
           setIsLoading(false)
+          setAutoZoomLocked(false)
         }}
         onLoadProject={handleLoadProject}
         onSaveAsProject={async () => {
@@ -1325,6 +1328,8 @@ function App() {
               setGridWidth={setGridWidth}
               zoom={zoom}
               setZoom={setZoom}
+              autoZoomLocked={autoZoomLocked}
+              setAutoZoomLocked={setAutoZoomLocked}
               bpm={bpm}
               setBpm={setBpm}
               loopStart={loopStart}

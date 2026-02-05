@@ -7,7 +7,7 @@ import { playBackendNote, noteNameToMidi, backendPanic, loadSF2, setSF2Preset } 
 const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const OCTAVES = [2, 3, 4, 5, 6, 7]
 const INITIAL_GRID_WIDTH = 32
-const EXTEND_AMOUNT = 16
+const AUTO_EXPAND_PADDING_BEATS = 16
 const BEAT_WIDTH = 40 // px
 const NOTE_HEIGHT = 20 // px
 const RESIZE_HANDLE_WIDTH = 10 // px, hit area for resize detection
@@ -229,7 +229,26 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     }
   }, [trackType, samplerPath])
 
-  useEffect(() => { notesRef.current = notes }, [notes])
+    useEffect(() => { notesRef.current = notes }, [notes])
+
+    // Auto-expand piano roll when notes extend beyond current grid (Logic/GarageBand style)
+    useEffect(() => {
+      if (!setGridWidth) return
+      if (!notes || notes.length === 0) return
+
+      let maxEnd = 0
+      for (const n of notes) {
+        const end = (n.start || 0) + (n.duration || 0)
+        if (end > maxEnd) maxEnd = end
+      }
+      if (maxEnd <= 0) return
+
+      const padded = maxEnd + AUTO_EXPAND_PADDING_BEATS // add 4 bars of breathing room
+      const rounded = Math.ceil(padded / 4) * 4
+      if (rounded > gridWidth) {
+        setGridWidth(gw => (rounded > gw ? rounded : gw))
+      }
+    }, [notes, gridWidth, setGridWidth])
 
   // Sync instrument state to ref so closures always see latest
   useEffect(() => { spessaInstrumentRef.current = spessaInstrument }, [spessaInstrument])
@@ -1780,11 +1799,6 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     }
   }, [dragging, resizing, marquee])
 
-  // Extend piano roll
-  const handleExtend = () => {
-    setGridWidth(gw => gw + EXTEND_AMOUNT)
-  }
-
   // Import MIDI file and replace notes
   const handleImportMidi = async () => {
     try {
@@ -1821,8 +1835,8 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
       imported.sort((a, b) => a.start - b.start || a.note.localeCompare(b.note))
   commitNotesChange(imported)
       // Extend grid to fit imported content with a small tail
-      const needed = Math.ceil(maxEnd + 4)
-      setGridWidth(gw => (needed > gw ? needed : gw))
+        const needed = Math.ceil(maxEnd + AUTO_EXPAND_PADDING_BEATS)
+        setGridWidth(gw => (needed > gw ? needed : gw))
       setCurrentBeat(0)
     } catch (err) {
       console.error('Failed to import MIDI:', err)
@@ -2020,14 +2034,6 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
             title="Change grid division"
           >
             Grid: 1/{gridDivision}
-          </button>
-          <button
-            onClick={handleExtend}
-            disabled={mode !== 'edit'}
-            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : 'bg-zinc-800/60 hover:bg-zinc-700 text-zinc-300 hover:text-white border-zinc-700/50'}`}
-            title={`Extend roll by ${EXTEND_AMOUNT} beats`}
-          >
-            Extend
           </button>
         </div>
 
