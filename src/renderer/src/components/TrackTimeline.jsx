@@ -1185,17 +1185,60 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         ctx.fillText(regionLabel, regionX + labelPadding, regionY + labelPadding)
         ctx.restore()
         
-        // Waveform-like visualization (simplified)
+        // Region visualization
         if (!isPlaceholderRegion) {
-          ctx.strokeStyle = '#ffffff66'
-          ctx.lineWidth = 1
-          const waveY = regionY + regionHeight / 2
-          for (let i = 0; i < regionWidth - 4; i += 3) {
-            const amplitude = (Math.sin(i * 0.1) * 0.3 + 0.7) * (regionHeight * 0.3)
-            ctx.beginPath()
-            ctx.moveTo(regionX + labelPadding + i, waveY - amplitude / 2)
-            ctx.lineTo(regionX + labelPadding + i, waveY + amplitude / 2)
-            ctx.stroke()
+          if (track.type === 'audio') {
+            // Waveform-like visualization (simplified)
+            ctx.strokeStyle = '#ffffff66'
+            ctx.lineWidth = 1
+            const waveY = regionY + regionHeight / 2
+            for (let i = 0; i < regionWidth - 4; i += 3) {
+              const amplitude = (Math.sin(i * 0.1) * 0.3 + 0.7) * (regionHeight * 0.3)
+              ctx.beginPath()
+              ctx.moveTo(regionX + labelPadding + i, waveY - amplitude / 2)
+              ctx.lineTo(regionX + labelPadding + i, waveY + amplitude / 2)
+              ctx.stroke()
+            }
+          } else if (track.type !== 'beat') {
+            // Mini piano-roll visualization for MIDI tracks
+            const noteList = notes || []
+            if (noteList.length > 0) {
+              const midis = noteList.map(n => noteNameToMidi(n.note)).filter(n => typeof n === 'number' && !isNaN(n))
+              const minMidi = midis.length > 0 ? Math.min(...midis) : 60
+              const maxMidi = midis.length > 0 ? Math.max(...midis) : 60
+              const pitchRange = Math.max(1, maxMidi - minMidi)
+              const padY = 8
+              const padX = labelPadding
+              const innerX = regionX + padX
+              const innerY = regionY + padY
+              const innerW = Math.max(0, regionWidth - padX * 2)
+              const innerH = Math.max(0, regionHeight - padY * 2)
+              const noteH = 1
+
+              ctx.save()
+              ctx.beginPath()
+              ctx.roundRect(regionX, regionY, regionWidth, regionHeight, 6)
+              ctx.clip()
+
+              ctx.fillStyle = '#ffffffcc'
+
+              noteList.forEach((n) => {
+                const midi = noteNameToMidi(n.note)
+                if (typeof midi !== 'number' || isNaN(midi)) return
+                const relX = (n.start || 0) * beatWidth
+                const w = Math.max(1, (n.duration || 0) * beatWidth)
+                const rel = (midi - minMidi) / pitchRange
+                const y = innerY + (1 - rel) * Math.max(0, innerH - noteH)
+                const x = innerX + relX
+                if (x > regionX + regionWidth || x + w < regionX) return
+                ctx.beginPath()
+                ctx.roundRect(x, y, w, noteH, 2)
+                ctx.fill()
+                ctx.stroke()
+              })
+
+              ctx.restore()
+            }
           }
         }
 
