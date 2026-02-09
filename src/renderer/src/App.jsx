@@ -234,7 +234,7 @@ function App() {
   const handleImportAudio = async () => {
     try {
       setIsImportingAudio(true)
-      setImportLoadingMessage('Importing audio...')
+      setImportLoadingMessage('audio...')
       const placeholderId = Date.now()
       const placeholderTrack = {
         id: placeholderId,
@@ -243,7 +243,7 @@ function App() {
         noteCount: 0,
         type: 'audio',
         audioClip: {
-          name: 'Importing audio...',
+          name: 'audio...',
           bytes: null,
           path: null,
           isLoading: true
@@ -800,11 +800,13 @@ function App() {
       const resp = await window.api?.openProject?.()
       if (!resp) {
         setLoadingMessage('')
+        setIsLoading(false)
         return
       }
       if (!resp.ok || !resp.project) {
         if (resp && resp.canceled) {
           setLoadingMessage('')
+          setIsLoading(false)
           return
         }
         console.error('Open project failed:', resp && resp.error)
