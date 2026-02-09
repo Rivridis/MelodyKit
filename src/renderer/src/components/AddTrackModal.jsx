@@ -132,9 +132,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
                   <div className="text-sm font-semibold">{type.label}</div>
                   <div className="text-xs text-zinc-400">{type.desc}</div>
                 </div>
-                {type.id === 'beat' && (
-                  <span className="ml-auto text-xs text-amber-200/80">Select pack</span>
-                )}
+                
               </button>
             ))}
           </div>
