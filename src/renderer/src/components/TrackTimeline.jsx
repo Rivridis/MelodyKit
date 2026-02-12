@@ -129,6 +129,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
+  const [knifeToolEnabled, setKnifeToolEnabled] = useState(false)
   const [hoveredTrack, setHoveredTrack] = useState(null)
   const [resizing, setResizing] = useState(null) // { trackId, trackType, regionId, side, startX, startBeat, startLen, currentStart, currentLen, minLen }
   const [dragging, setDragging] = useState(null) // { trackId, trackType, regionId, startX, startBeat, currentBeat, offsetBeats }
@@ -357,32 +358,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
   const beatWidthRef = useRef(beatWidth)
   useEffect(() => { beatWidthRef.current = beatWidth }, [beatWidth])
 
-  // Auto-reduce zoom to keep newly-extended timelines reasonably in view
-  useEffect(() => {
-    if (!setZoom) return
-    if (autoZoomLocked) return
-    const container = scrollContainerRef.current
-    if (!container) return
-
-    const update = () => {
-      const available = container.clientWidth || 0
-      if (!available) return
-      const usable = Math.max(0, available - SIDEBAR_WIDTH)
-      if (usable <= 0) return
-      const fitZoom = usable / (gridWidth * BEAT_WIDTH)
-      const clamped = Math.max(0.5, Math.min(1, fitZoom))
-      if (clamped < zoom - 0.001) {
-        setZoom((z) => (clamped < z ? clamped : z))
-      }
-    }
-
-    update()
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null
-    if (ro) ro.observe(container)
-    return () => {
-      if (ro) ro.disconnect()
-    }
-  }, [gridWidth, zoom, setZoom, autoZoomLocked])
+  // Auto zoom-out disabled: zoom is now fully user-controlled.
 
   useEffect(() => {
     // Use shared AudioContext across views
@@ -2179,6 +2155,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
     
     if (resizing) return
     if (dragging) return
+    if (knifeToolEnabled) return
     if (resizeClickSuppressRef.current) {
       // Suppress the click that follows a resize drag so we don't open editors
       resizeClickSuppressRef.current = false
@@ -2239,6 +2216,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
         const nearRight = Math.abs(x - (r.regionX + r.regionWidth)) <= 6
         return inY && (nearLeft || nearRight)
       })
+      if (knifeToolEnabled) {
+        canvasRef.current.style.cursor = hit && isMidiLikeTrack(track) ? 'crosshair' : 'default'
+        return
+      }
       if (resizeHit) {
         canvasRef.current.style.cursor = 'ew-resize'
       } else if (hit) {
@@ -2333,6 +2314,34 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
       const inX = x >= r.regionX && x <= r.regionX + r.regionWidth
       return inY && inX
     })
+
+    if (knifeToolEnabled) {
+      if (!isMidiLikeTrack(track) || !hit) return
+      const notes = trackNotes?.[track.id] || []
+      const regions = getMidiRegionsForTrack(track.id, notes)
+      const target = regions.find((r) => r.id === hit.id)
+      if (!target) return
+      const splitBeat = snapBeat(Math.max(0, (x - SIDEBAR_WIDTH) / beatWidth))
+      const minSplit = target.start + MIN_REGION_BEATS
+      const maxSplit = target.start + target.duration - MIN_REGION_BEATS
+      if (splitBeat <= minSplit + 0.0001 || splitBeat >= maxSplit - 0.0001) return
+
+      const next = regions.flatMap((r) => {
+        if (r.id !== target.id) return [r]
+        const left = { ...r, duration: Math.max(MIN_REGION_BEATS, snapBeat(splitBeat - r.start)) }
+        const right = {
+          id: `r-${track.id}-${Date.now()}`,
+          start: splitBeat,
+          duration: Math.max(MIN_REGION_BEATS, snapBeat((r.start + r.duration) - splitBeat))
+        }
+        return [left, right]
+      })
+      commitMidiRegions(track.id, next)
+      dragClickSuppressRef.current = true
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
 
     if (resizeHit) {
       let minLen = track.type === 'beat' ? 4 : MIN_REGION_BEATS
@@ -3037,6 +3046,18 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
 
         {/* Loop controls */}
         <div className="flex items-center gap-2 ml-2 border-l border-zinc-700 pl-3">
+          <button
+            onClick={() => setKnifeToolEnabled((v) => !v)}
+            className={`inline-flex items-center justify-center h-9 px-3 rounded-md transition-colors text-sm font-medium ${
+              knifeToolEnabled
+                ? 'bg-sky-600 hover:bg-sky-500 text-white'
+                : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+            }`}
+            title={knifeToolEnabled ? 'Knife tool enabled (click region to split)' : 'Enable knife tool'}
+          >
+            Knife
+          </button>
+
           <button
             onClick={() => {
               if (loopStart !== null && loopEnd !== null) {
