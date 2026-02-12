@@ -11,6 +11,7 @@ const TIMELINE_HEIGHT = 30
 const SIDEBAR_WIDTH = 180
 const INITIAL_GRID_WIDTH = 32
 const AUTO_EXPAND_PADDING_BEATS = 16
+const MIN_REGION_BEATS = 0.25
 // Draw text with ellipsis if it exceeds maxWidth
 function drawEllipsizedText(ctx, text, x, y, maxWidth) {
   if (!text) return
@@ -63,15 +64,74 @@ function calculateRegion(notes) {
   }
 }
 
+function isMidiLikeTrack(track) {
+  return track?.type !== 'audio' && track?.type !== 'beat'
+}
+
+function snapBeat(beat) {
+  return Math.round(beat * 4) / 4
+}
+
+function ceilBeat(beat) {
+  return Math.ceil(beat * 4) / 4
+}
+
+function floorBeat(beat) {
+  return Math.floor(beat * 4) / 4
+}
+
+function normalizeRegions(regions = []) {
+  return regions
+    .map((r, idx) => {
+      const start = Number(r?.start)
+      const duration = Number(r?.duration)
+      if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) return null
+      return {
+        id: r?.id || `r-${idx}`,
+        start: Math.max(0, snapBeat(start)),
+        duration: Math.max(MIN_REGION_BEATS, snapBeat(duration))
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start)
+}
+
+function resolveRegionOverlaps(regions = []) {
+  const sorted = normalizeRegions(regions)
+  if (sorted.length <= 1) return sorted
+  const out = []
+  let cursor = 0
+  for (const r of sorted) {
+    const start = Math.max(cursor, r.start)
+    const duration = Math.max(MIN_REGION_BEATS, r.duration)
+    out.push({ ...r, start, duration })
+    cursor = start + duration
+  }
+  return out
+}
+
+function isNoteInsideRegion(noteStart, region) {
+  return noteStart >= region.start - 0.0001 && noteStart < (region.start + region.duration) - 0.0001
+}
+
+function getNoteOwnerRegionId(noteStart, regions = []) {
+  // In overlap/edge cases, assign ownership to the latest-starting matching region.
+  let owner = null
+  for (const r of regions) {
+    if (isNoteInsideRegion(noteStart, r)) owner = r.id
+  }
+  return owner
+}
+
 const sharedAudioClipCache = {}
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
   const [hoveredTrack, setHoveredTrack] = useState(null)
-  const [resizing, setResizing] = useState(null) // { trackId, startX, startLen, currentLen }
-  const [dragging, setDragging] = useState(null) // { trackId, startX, startBeat, currentBeat, offsetBeats }
+  const [resizing, setResizing] = useState(null) // { trackId, trackType, regionId, side, startX, startBeat, startLen, currentStart, currentLen, minLen }
+  const [dragging, setDragging] = useState(null) // { trackId, trackType, regionId, startX, startBeat, currentBeat, offsetBeats }
   const [loopDragging, setLoopDragging] = useState(null) // { type: 'body'|'start'|'end', startX, initialLoopStart, initialLoopEnd }
   const resizeClickSuppressRef = useRef(false)
   const dragClickSuppressRef = useRef(false)
@@ -159,6 +219,76 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     const loopBeats = typeof trackLengths?.[trackId] === 'number' ? trackLengths[trackId] : null
     if (loopBeats && loopBeats > 0) return Math.max(clipBeats, loopBeats)
     return clipBeats
+  }
+
+  const getTrackBaseDuration = (trackId, notes = []) => {
+    const noteEnd = notes.length > 0
+      ? Math.max(...notes.map((n) => (n.start || 0) + (n.duration || 0)))
+      : 0
+    const manualLen = typeof trackLengths?.[trackId] === 'number' ? trackLengths[trackId] : 0
+    const base = Math.max(noteEnd, manualLen)
+    return base > 0 ? base : 4
+  }
+
+  const getMidiRegionsForTrack = (trackId, notes = []) => {
+    const explicit = resolveRegionOverlaps(trackRegions?.[trackId] || [])
+    if (explicit.length > 0) return explicit
+    const fallbackStart = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+    const fallbackDuration = getTrackBaseDuration(trackId, notes)
+    return [{ id: `legacy-${trackId}`, start: Math.max(0, snapBeat(fallbackStart)), duration: Math.max(MIN_REGION_BEATS, snapBeat(fallbackDuration)) }]
+  }
+
+  const commitMidiRegions = (trackId, regions) => {
+    const normalized = resolveRegionOverlaps(regions)
+    setTrackRegions?.((prev) => ({ ...prev, [trackId]: normalized }))
+    if (normalized.length > 0) {
+      setTrackOffsets?.((prev) => ({ ...prev, [trackId]: normalized[0].start }))
+    }
+  }
+
+  const getTrackRegionsForDisplay = (track, notes = []) => {
+    if (track.type === 'audio') {
+      const trackOffset = typeof trackOffsets?.[track.id] === 'number' ? trackOffsets[track.id] : 0
+      const rec = loadedAudioClipsRef.current?.[track.id]
+      const durationSec = rec?.buffer?.duration || 0
+      if (durationSec > 0) {
+        let beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
+        if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') beats = Math.max(beats, resizing.currentLen)
+        let start = dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number' ? dragging.currentBeat : trackOffset
+        if (resizing && resizing.trackId === track.id && typeof resizing.currentStart === 'number') start = resizing.currentStart
+        return [{ id: `audio-${track.id}`, start, duration: beats, isPlaceholderRegion: false }]
+      }
+      if (track.audioClip) {
+        let beats = typeof trackLengths?.[track.id] === 'number' ? Math.max(1, trackLengths[track.id]) : 8
+        if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') beats = Math.max(1, resizing.currentLen)
+        let start = dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number' ? dragging.currentBeat : trackOffset
+        if (resizing && resizing.trackId === track.id && typeof resizing.currentStart === 'number') start = resizing.currentStart
+        return [{ id: `audio-${track.id}`, start, duration: beats, isPlaceholderRegion: true }]
+      }
+      return []
+    }
+
+    if (track.type === 'beat') {
+      const p = trackBeats?.[track.id]
+      if (!p) return []
+      const defaultBeats = 4
+      let beats = typeof p.lengthBeats === 'number' ? Math.max(4, p.lengthBeats) : defaultBeats
+      if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') beats = Math.max(4, resizing.currentLen)
+      const trackOffset = typeof trackOffsets?.[track.id] === 'number' ? trackOffsets[track.id] : 0
+      let start = dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number' ? dragging.currentBeat : trackOffset
+      if (resizing && resizing.trackId === track.id && typeof resizing.currentStart === 'number') start = resizing.currentStart
+      return [{ id: `beat-${track.id}`, start, duration: beats, isPlaceholderRegion: false }]
+    }
+
+    const base = getMidiRegionsForTrack(track.id, notes)
+    return base.map((r) => {
+      let start = r.start
+      let duration = r.duration
+      if (dragging && dragging.trackId === track.id && dragging.regionId === r.id && typeof dragging.currentBeat === 'number') start = dragging.currentBeat
+      if (resizing && resizing.trackId === track.id && resizing.regionId === r.id && typeof resizing.currentStart === 'number') start = resizing.currentStart
+      if (resizing && resizing.trackId === track.id && resizing.regionId === r.id && typeof resizing.currentLen === 'number') duration = Math.max(MIN_REGION_BEATS, resizing.currentLen)
+      return { ...r, start, duration, isPlaceholderRegion: false }
+    })
   }
 
   // Ensure per-track gain chain exists for current context
@@ -371,9 +501,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
 
     tracks.forEach((track) => {
       const trackId = track.id
-      const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
 
       if (track.type === 'audio') {
+        const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
         const rec = loadedAudioClipsRef.current?.[trackId]
         if (rec?.buffer) {
           const loopBeats = getAudioLoopBeats(trackId, rec.buffer, bpm)
@@ -383,6 +513,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       }
 
       if (track.type === 'beat') {
+        const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
         const pattern = trackBeats?.[trackId]
         const defaultBeats = 4
         const beats = typeof pattern?.lengthBeats === 'number' ? Math.max(4, pattern.lengthBeats) : defaultBeats
@@ -391,15 +522,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       }
 
       const notes = notesByTrack[trackId] || []
-      let lastNoteEnd = 0
-      if (notes.length > 0) {
-        lastNoteEnd = Math.max(...notes.map(n => (n.start || 0) + (n.duration || 0)))
-      }
-
-      const manualLen = typeof trackLengths?.[trackId] === 'number' ? trackLengths[trackId] : 0
-      const trackEnd = Math.max(lastNoteEnd, manualLen)
-      if (trackEnd > 0) {
-        maxEndBeat = Math.max(maxEndBeat, trackOffset + trackEnd)
+      const regions = getMidiRegionsForTrack(trackId, notes)
+      for (const r of regions) {
+        const end = r.start + r.duration
+        if (end > maxEndBeat) maxEndBeat = end
       }
     })
 
@@ -410,7 +536,79 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (rounded > gridWidth) {
       setGridWidth((gw) => (rounded > gw ? rounded : gw))
     }
-  }, [tracks, trackNotes, trackBeats, trackOffsets, trackLengths, bpm, gridWidth, setGridWidth])
+  }, [tracks, trackNotes, trackBeats, trackOffsets, trackLengths, trackRegions, bpm, gridWidth, setGridWidth])
+
+  // Auto-expand MIDI/sampler regions when notes inside each region extend, capped by the next region start.
+  useEffect(() => {
+    const regionUpdates = {}
+    const lengthUpdates = {}
+
+    tracks.forEach((track) => {
+      if (!isMidiLikeTrack(track)) return
+      const notes = trackNotes?.[track.id] || []
+      if (!notes.length) return
+
+      const explicit = normalizeRegions(trackRegions?.[track.id] || [])
+      if (explicit.length > 0) {
+        const resolved = resolveRegionOverlaps(explicit)
+        let changed = false
+        const nextRegions = resolved.map((r) => ({ ...r }))
+        for (const n of notes) {
+          const nStart = n.start || 0
+          const nEnd = (n.start || 0) + (n.duration || 0)
+          // Expand only the directly previous region (latest start <= note start)
+          let idx = -1
+          for (let i = 0; i < nextRegions.length; i++) {
+            if (nextRegions[i].start <= nStart + 0.0001) idx = i
+            else break
+          }
+          if (idx < 0) idx = 0
+          const r = nextRegions[idx]
+          const prev = idx > 0 ? nextRegions[idx - 1] : null
+          const next = nextRegions[idx + 1]
+
+          // Backward expansion only when this is the first region.
+          if (!prev && nStart < r.start - 0.0001) {
+            let newStart = Math.max(0, floorBeat(nStart))
+            const maxStart = next
+              ? Math.max(0, next.start - MIN_REGION_BEATS)
+              : Number.POSITIVE_INFINITY
+            if (Number.isFinite(maxStart)) newStart = Math.min(newStart, maxStart)
+            if (newStart < r.start - 0.0001) {
+              const oldEnd = r.start + r.duration
+              r.start = newStart
+              r.duration = Math.max(MIN_REGION_BEATS, ceilBeat(oldEnd - newStart))
+              changed = true
+            }
+          }
+
+          const maxEnd = next ? next.start : Number.POSITIVE_INFINITY
+          const targetEnd = Math.min(nEnd, maxEnd)
+          if (targetEnd <= r.start + 0.0001) continue
+          const needed = Math.max(MIN_REGION_BEATS, ceilBeat(targetEnd - r.start))
+          if (needed > r.duration + 0.0001) {
+            r.duration = needed
+            changed = true
+          }
+        }
+        if (changed) regionUpdates[track.id] = nextRegions
+      } else {
+        const noteEnd = Math.max(...notes.map((n) => (n.start || 0) + (n.duration || 0)))
+        if (!(noteEnd > 0)) return
+        const currentLen = typeof trackLengths?.[track.id] === 'number' ? trackLengths[track.id] : 0
+        if (noteEnd > currentLen + 0.0001) {
+          lengthUpdates[track.id] = Math.max(MIN_REGION_BEATS, snapBeat(noteEnd))
+        }
+      }
+    })
+
+    if (Object.keys(regionUpdates).length > 0) {
+      setTrackRegions?.((prev) => ({ ...prev, ...regionUpdates }))
+    }
+    if (Object.keys(lengthUpdates).length > 0) {
+      setTrackLengths?.((prev) => ({ ...prev, ...lengthUpdates }))
+    }
+  }, [tracks, trackNotes, trackRegions, trackLengths, setTrackRegions, setTrackLengths])
   
   // Handle BPM changes during playback
   useEffect(() => {
@@ -1066,84 +1264,10 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       }
       
       
-      // Draw region: for MIDI tracks use notes; for audio tracks use clip duration; for beat tracks use adjustable loop length
-      let region = null
-      let isPlaceholderRegion = false
-      let trackOffset = typeof trackOffsets?.[track.id] === 'number' ? trackOffsets[track.id] : 0
-      
-      if (track.type === 'audio') {
-        const rec = loadedAudioClipsRef.current?.[track.id]
-        const durationSec = rec?.buffer?.duration || 0
-        if (durationSec > 0) {
-          let beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
-          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
-            beats = Math.max(beats, resizing.currentLen)
-          }
-          // Apply offset for audio tracks
-          if (dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number') {
-            trackOffset = dragging.currentBeat
-          }
-          region = { start: trackOffset, duration: beats, end: trackOffset + beats }
-        } else if (track.audioClip) {
-          // Placeholder region while audio is still decoding
-          let beats = typeof trackLengths?.[track.id] === 'number' ? Math.max(1, trackLengths[track.id]) : 8
-          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
-            beats = Math.max(1, resizing.currentLen)
-          }
-          if (dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number') {
-            trackOffset = dragging.currentBeat
-          }
-          region = { start: trackOffset, duration: beats, end: trackOffset + beats }
-          isPlaceholderRegion = true
-        }
-      } else if (track.type === 'beat') {
-        const p = trackBeats?.[track.id]
-        if (p) {
-          // Default to 1 bar (4 beats) when no explicit length is set, regardless of steps count
-          const defaultBeats = 4
-          let beats = typeof p.lengthBeats === 'number' ? Math.max(4, p.lengthBeats) : defaultBeats
-          // If actively resizing this beat track, show live length
-          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
-            beats = Math.max(4, resizing.currentLen)
-          }
-          // Get start position from trackOffsets (unified across all track types)
-          let startBeat = trackOffset
-          // If actively dragging this beat track, show live position
-          if (dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number') {
-            startBeat = dragging.currentBeat
-          }
-          region = { start: startBeat, duration: beats, end: startBeat + beats }
-        }
-      } else {
-        // MIDI/note tracks
-        if (notes && notes.length > 0) {
-          // Apply offset for MIDI tracks
-          if (dragging && dragging.trackId === track.id && typeof dragging.currentBeat === 'number') {
-            trackOffset = dragging.currentBeat
-          }
-          // Find the last note end position (relative to track start)
-          const ends = notes.map(n => (n.start || 0) + (n.duration || 0))
-          const lastNoteEnd = Math.max(...ends)
-          
-          // Use manual length if set, otherwise use calculated length from notes
-          let duration = lastNoteEnd
-          if (trackLengths && typeof trackLengths[track.id] === 'number') {
-            duration = Math.max(lastNoteEnd, trackLengths[track.id])
-          }
-          // If actively resizing this MIDI track, show live length
-          if (resizing && resizing.trackId === track.id && typeof resizing.currentLen === 'number') {
-            duration = Math.max(lastNoteEnd, resizing.currentLen)
-          }
-          
-          // Region starts at track offset (beat 0 of track) and extends to duration
-          region = { 
-            start: trackOffset, 
-            duration: duration, 
-            end: trackOffset + duration 
-          }
-        }
-      }
-      if (region) {
+      const regions = getTrackRegionsForDisplay(track, notes)
+      if (regions && regions.length > 0) {
+        regions.forEach((region) => {
+        const isPlaceholderRegion = !!region.isPlaceholderRegion
         const regionX = SIDEBAR_WIDTH + region.start * beatWidth
         const regionWidth = region.duration * beatWidth
         const regionY = y + 12
@@ -1199,7 +1323,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               ctx.lineTo(regionX + labelPadding + i, waveY + amplitude / 2)
               ctx.stroke()
             }
-          } else if (track.type !== 'beat') {
+          } else if (track.type !== 'beat' && !dragging) {
             // Mini piano-roll visualization for MIDI tracks
             const noteList = notes || []
             if (noteList.length > 0) {
@@ -1225,7 +1349,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               noteList.forEach((n) => {
                 const midi = noteNameToMidi(n.note)
                 if (typeof midi !== 'number' || isNaN(midi)) return
-                const relX = (n.start || 0) * beatWidth
+                const ownerId = getNoteOwnerRegionId(n.start || 0, regions)
+                if (ownerId !== region.id) return
+                const relX = ((n.start || 0) - region.start) * beatWidth
                 const w = Math.max(1, (n.duration || 0) * beatWidth)
                 const rel = (midi - minMidi) / pitchRange
                 const y = innerY + (1 - rel) * Math.max(0, innerH - noteH)
@@ -1262,12 +1388,18 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           }
         }
 
-        // Resize handle for beat/audio tracks
+        // Resize handles (left + right)
+        const rightHandleX = regionX + regionWidth - 4
+        const leftHandleX = regionX + 1
+        ctx.fillStyle = '#ffffff99'
         if (track.type === 'beat' || track.type === 'audio') {
-          const handleX = regionX + regionWidth - 4
-          ctx.fillStyle = '#ffffff99'
-          ctx.fillRect(handleX, regionY + 6, 3, regionHeight - 12)
+          ctx.fillRect(leftHandleX, regionY + 6, 3, regionHeight - 12)
+          ctx.fillRect(rightHandleX, regionY + 6, 3, regionHeight - 12)
+        } else {
+          ctx.fillRect(leftHandleX, regionY + 8, 2, regionHeight - 16)
+          ctx.fillRect(rightHandleX, regionY + 8, 2, regionHeight - 16)
         }
+        })
       }
       
       // Track separator
@@ -1278,7 +1410,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       ctx.lineTo(CANVAS_WIDTH, y + TRACK_HEIGHT)
       ctx.stroke()
     })
-  }, [tracks, trackNotes, trackBeats, trackOffsets, gridWidth, hoveredTrack, beatWidth, resizing, dragging, audioClipsVersion])
+  }, [tracks, trackNotes, trackBeats, trackOffsets, trackLengths, trackRegions, gridWidth, hoveredTrack, beatWidth, resizing, dragging, audioClipsVersion, bpm])
 
   // Play a note with per-track instrument support
   const playNote = (trackId, noteName, duration = 0.3, currentBeat = null) => {
@@ -1437,9 +1569,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
       let maxEndBeat = 0
       const tnPlay = trackNotesRef.current || {}
       Object.entries(tnPlay).forEach(([trackId, notes = []]) => {
-        const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
-        for (const n of notes) {
-          const endBeat = (n.start || 0) + (n.duration || 0) + trackOffset
+        const regions = getMidiRegionsForTrack(trackId, notes)
+        for (const r of regions) {
+          const endBeat = r.start + r.duration
           if (endBeat > maxEndBeat) maxEndBeat = endBeat
         }
       })
@@ -1461,6 +1593,15 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
               const defaultBeats = 4
               const beats = typeof p.lengthBeats === 'number' ? Math.max(4, p.lengthBeats) : defaultBeats
               const endBeat = trackOffset + beats
+              if (endBeat > maxEndBeat) maxEndBeat = endBeat
+            }
+            return
+          }
+          if (isMidiLikeTrack(t)) {
+            const notes = tnPlay[t.id] || []
+            const regions = getMidiRegionsForTrack(t.id, notes)
+            for (const r of regions) {
+              const endBeat = r.start + r.duration
               if (endBeat > maxEndBeat) maxEndBeat = endBeat
             }
           }
@@ -1744,12 +1885,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
           Object.entries(trackNotesRef.current).forEach(([trackId, notes]) => {
             // Check if track should be audible
             if (!isTrackAudible(Number(trackId))) return
-            
-            const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+            const regions = getMidiRegionsForTrack(trackId, notes)
             notes.forEach(note => {
-              // Apply track offset to note position
-              const noteAbsoluteStart = (note.start || 0) + trackOffset
-              const noteStartRounded = Math.round(noteAbsoluteStart * subdivisionsPerBeat) / subdivisionsPerBeat
+              const noteStart = note.start || 0
+              if (!getNoteOwnerRegionId(noteStart, regions)) return
+              const noteStartRounded = Math.round(noteStart * subdivisionsPerBeat) / subdivisionsPerBeat
               if (Math.abs(noteStartRounded - positionRounded) < epsilon) {
                 playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000, beat)
               }
@@ -1785,12 +1925,20 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
   useEffect(() => {
     const handleGlobalMouseUp = () => {
       if (resizing) {
-        const { trackId, trackType, currentLen, startLen, minLen } = resizing
+        const { trackId, trackType, regionId, side, currentStart, currentLen, startBeat, startLen, minLen } = resizing
         const raw = Number(currentLen || startLen) || 4
-        const bars = Math.max(1, Math.round(raw / 4))
-        let commitLen = bars * 4
+        let commitStart = typeof currentStart === 'number' ? currentStart : startBeat
+        let commitLen = raw
+        if (trackType === 'beat' || trackType === 'audio') {
+          const bars = Math.max(1, Math.round(raw / 4))
+          commitLen = bars * 4
+          commitStart = snapBeat(commitStart)
+        } else {
+          commitLen = Math.max(MIN_REGION_BEATS, snapBeat(raw))
+          commitStart = snapBeat(commitStart)
+        }
         // Only suppress click if there was actual resizing (length changed)
-        if (commitLen !== startLen) {
+        if (commitLen !== startLen || Math.abs(commitStart - startBeat) > 0.01) {
           resizeClickSuppressRef.current = true
         }
         
@@ -1800,31 +1948,77 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             const p = prev?.[trackId] || { steps: 16, rows: [] }
             return { ...prev, [trackId]: { ...p, lengthBeats: commitLen } }
           })
-        } else {
+          if (side === 'left') {
+            setTrackOffsets?.((prev) => ({ ...prev, [trackId]: Math.max(0, commitStart) }))
+          }
+        } else if (trackType === 'audio') {
           if (typeof minLen === 'number') commitLen = Math.max(minLen, commitLen)
-          // Update MIDI track manual length
+          // Update audio track manual length
           setTrackLengths?.((prev) => ({ ...prev, [trackId]: commitLen }))
+          if (side === 'left') {
+            setTrackOffsets?.((prev) => ({ ...prev, [trackId]: Math.max(0, commitStart) }))
+          }
+        } else {
+          const notes = trackNotesRef.current?.[trackId] || []
+          const base = getMidiRegionsForTrack(trackId, notes)
+          const next = base.map((r) => (r.id === regionId ? { ...r, start: commitStart, duration: commitLen } : r))
+          const sorted = normalizeRegions(next)
+          const idx = sorted.findIndex((r) => r.id === regionId)
+          if (idx >= 0) {
+            const prev = idx > 0 ? sorted[idx - 1] : null
+            const after = idx < sorted.length - 1 ? sorted[idx + 1] : null
+            let bounded = sorted[idx].duration
+            if (prev) {
+              const minStart = prev.start + prev.duration
+              if (sorted[idx].start < minStart) sorted[idx].start = minStart
+            }
+            if (after) {
+              const maxDur = Math.max(MIN_REGION_BEATS, after.start - sorted[idx].start)
+              bounded = Math.min(bounded, maxDur)
+            }
+            sorted[idx].duration = Math.max(MIN_REGION_BEATS, snapBeat(bounded))
+          }
+          commitMidiRegions(trackId, sorted)
         }
         
         setResizing(null)
       }
       
       if (dragging) {
-        const { trackId, currentBeat, startBeat } = dragging
+        const { trackId, trackType, regionId, currentBeat, startBeat } = dragging
         // Use currentBeat if it's a number (including 0), otherwise fall back to startBeat
-        const beatToCommit = typeof currentBeat === 'number' ? currentBeat : startBeat
-        const commitStart = Math.max(0, Math.round(beatToCommit * 4) / 4)
+        let beatToCommit = typeof currentBeat === 'number' ? currentBeat : startBeat
+        beatToCommit = Math.max(0, snapBeat(beatToCommit))
         // Only suppress click if there was actual dragging (position changed by more than threshold)
-        if (Math.abs(commitStart - startBeat) > 0.01) {
+        if (Math.abs(beatToCommit - startBeat) > 0.01) {
           dragClickSuppressRef.current = true
         }
-        // Update trackOffsets for all track types (unified approach)
-        console.log(`[TrackTimeline] Setting trackOffset for track ${trackId} to ${commitStart}`)
-        setTrackOffsets?.((prev) => {
-          const newOffsets = { ...prev, [trackId]: commitStart }
-          console.log('[TrackTimeline] New trackOffsets:', newOffsets)
-          return newOffsets
-        })
+        if (trackType === 'midi') {
+          const notes = trackNotesRef.current?.[trackId] || []
+          const base = getMidiRegionsForTrack(trackId, notes)
+          const moved = base.find((r) => r.id === regionId)
+          const next = base.map((r) => (r.id === regionId ? { ...r, start: beatToCommit } : r))
+          const resolvedNext = resolveRegionOverlaps(next)
+          const finalMoved = resolvedNext.find((r) => r.id === regionId)
+          const delta = moved && finalMoved ? (finalMoved.start - moved.start) : 0
+          if (Math.abs(delta) > 0.0001 && moved && setTrackNotes) {
+            setTrackNotes((prev) => {
+              const list = prev?.[trackId] || []
+              const shifted = list.map((n) => {
+                const s = n.start || 0
+                if (getNoteOwnerRegionId(s, base) === regionId) {
+                  return { ...n, start: Math.max(0, snapBeat(s + delta)) }
+                }
+                return n
+              })
+              return { ...prev, [trackId]: shifted }
+            })
+          }
+          commitMidiRegions(trackId, resolvedNext)
+        } else {
+          // Update trackOffsets for single-region tracks
+          setTrackOffsets?.((prev) => ({ ...prev, [trackId]: beatToCommit }))
+        }
         setDragging(null)
         if (canvasRef.current) {
           canvasRef.current.style.cursor = 'default'
@@ -1854,7 +2048,21 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const x = e.clientX - rect.left
         const beatAtMouse = Math.max(0, (x - SIDEBAR_WIDTH) / beatWidth)
         let newStart = Math.max(0, beatAtMouse - dragging.offsetBeats)
-        newStart = Math.round(newStart * 4) / 4
+        newStart = snapBeat(newStart)
+        if (dragging.trackType === 'midi') {
+          const notes = trackNotesRef.current?.[dragging.trackId] || []
+          const regions = getMidiRegionsForTrack(dragging.trackId, notes)
+          const idx = regions.findIndex((r) => r.id === dragging.regionId)
+          if (idx >= 0) {
+            const cur = regions[idx]
+            const prev = idx > 0 ? regions[idx - 1] : null
+            const next = idx < regions.length - 1 ? regions[idx + 1] : null
+            const minStart = prev ? prev.start + prev.duration : 0
+            const maxStart = next ? next.start - cur.duration : Number.POSITIVE_INFINITY
+            newStart = Math.max(minStart, Math.min(newStart, maxStart))
+            newStart = snapBeat(newStart)
+          }
+        }
         setDragging((prev) => (prev ? { ...prev, currentBeat: newStart } : prev))
       }
       
@@ -1862,11 +2070,54 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const rect = canvasRef.current.getBoundingClientRect()
         const x = e.clientX - rect.left
         const startLen = resizing.startLen
-        const dx = x - resizing.startX
-        let newLen = Math.max(1, startLen + dx / beatWidth)
-        const bars = Math.max(1, Math.round(newLen / 4))
-        newLen = bars * 4
-        setResizing((prev) => (prev ? { ...prev, currentLen: newLen } : prev))
+        const startBeat = resizing.startBeat
+        const endBeat = startBeat + startLen
+        const dx = (x - resizing.startX) / beatWidth
+        let newStart = startBeat
+        let newLen = startLen
+
+        if (resizing.side === 'left') {
+          newStart = snapBeat(startBeat + dx)
+          const minLen = resizing.minLen || MIN_REGION_BEATS
+          const maxStartByLen = endBeat - minLen
+          newStart = Math.min(newStart, maxStartByLen)
+          newStart = Math.max(0, newStart)
+          if (resizing.trackType === 'midi') {
+            const notes = trackNotesRef.current?.[resizing.trackId] || []
+            const regions = getMidiRegionsForTrack(resizing.trackId, notes)
+            const idx = regions.findIndex((r) => r.id === resizing.regionId)
+            if (idx > 0) {
+              const prevRegion = regions[idx - 1]
+              const minStart = prevRegion.start + prevRegion.duration
+              newStart = Math.max(minStart, newStart)
+            }
+          }
+          newStart = snapBeat(newStart)
+          newLen = Math.max(resizing.minLen || MIN_REGION_BEATS, snapBeat(endBeat - newStart))
+        } else {
+          newLen = Math.max(resizing.minLen || MIN_REGION_BEATS, startLen + dx)
+          if (resizing.trackType === 'midi') {
+            const notes = trackNotesRef.current?.[resizing.trackId] || []
+            const regions = getMidiRegionsForTrack(resizing.trackId, notes)
+            const idx = regions.findIndex((r) => r.id === resizing.regionId)
+            if (idx >= 0 && idx < regions.length - 1) {
+              const next = regions[idx + 1]
+              const maxLen = Math.max(MIN_REGION_BEATS, next.start - regions[idx].start)
+              newLen = Math.min(newLen, maxLen)
+            }
+          }
+          newLen = snapBeat(newLen)
+        }
+
+        if (resizing.trackType === 'beat' || resizing.trackType === 'audio') {
+          const bars = Math.max(1, Math.round(newLen / 4))
+          newLen = bars * 4
+          if (resizing.side === 'left') {
+            const boundedStart = Math.max(0, snapBeat(endBeat - newLen))
+            newStart = boundedStart
+          }
+        }
+        setResizing((prev) => (prev ? { ...prev, currentStart: newStart, currentLen: newLen } : prev))
       }
       
       if (loopDragging) {
@@ -1919,7 +2170,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         window.removeEventListener('mousemove', handleGlobalMouseMove)
       }
     }
-  }, [resizing, dragging, loopDragging, beatWidth, setTrackBeats])
+  }, [resizing, dragging, loopDragging, beatWidth, setTrackBeats, setTrackNotes, trackRegions, trackOffsets, trackLengths])
 
   // Handle canvas click - just open piano roll
   const handleCanvasClick = (e) => {
@@ -1949,6 +2200,20 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     }
   }
 
+  const getTrackRegionRects = (track, trackIndex) => {
+    const notes = trackNotes?.[track.id] || []
+    const regions = getTrackRegionsForDisplay(track, notes)
+    const regionY = trackIndex * TRACK_HEIGHT + 12
+    const regionHeight = TRACK_HEIGHT - 24
+    return regions.map((r) => ({
+      ...r,
+      regionX: SIDEBAR_WIDTH + r.start * beatWidth,
+      regionY,
+      regionWidth: r.duration * beatWidth,
+      regionHeight
+    }))
+  }
+
   // Handle mouse move for hover effects
   const handleCanvasMouseMove = (e) => {
     // Skip hover detection if we're actively dragging or resizing (handled by global listener)
@@ -1959,58 +2224,27 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     const x = e.clientX - rect.left
     const trackIndex = Math.floor(y / TRACK_HEIGHT)
 
-      if (trackIndex >= 0 && trackIndex < tracks.length) {
+    if (trackIndex >= 0 && trackIndex < tracks.length) {
       setHoveredTrack(trackIndex)
       const track = tracks[trackIndex]
-      
-      // Determine region bounds for this track
-      let regionX = 0, regionWidth = 0, regionY = 0, regionHeight = 0
-      const trackOffset = typeof trackOffsets?.[track.id] === 'number' ? trackOffsets[track.id] : 0
-      
-      if (track.type === 'beat') {
-        const p = trackBeats?.[track.id]
-        const beats = typeof p?.lengthBeats === 'number' ? Math.max(4, p.lengthBeats) : 4
-        regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-        regionWidth = beats * beatWidth
-        regionY = trackIndex * TRACK_HEIGHT + 12
-        regionHeight = TRACK_HEIGHT - 24
-      } else if (track.type === 'audio') {
-        const rec = loadedAudioClipsRef.current?.[track.id]
-        const durationSec = rec?.buffer?.duration || 0
-        if (durationSec > 0) {
-          const beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
-          regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-          regionWidth = beats * beatWidth
-          regionY = trackIndex * TRACK_HEIGHT + 12
-          regionHeight = TRACK_HEIGHT - 24
-        }
-      } else {
-        // MIDI track
-        const notes = trackNotes[track.id] || []
-        if (notes && notes.length > 0) {
-          // Find the last note end position (relative to track start)
-          const ends = notes.map(n => (n.start || 0) + (n.duration || 0))
-          const lastNoteEnd = Math.max(...ends)
-          regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-          regionWidth = lastNoteEnd * beatWidth
-          regionY = trackIndex * TRACK_HEIGHT + 12
-          regionHeight = TRACK_HEIGHT - 24
-        }
-      }
-      
-      // Check if hovering near resize handle (beat tracks only) or in region for dragging
-      if (regionWidth > 0) {
-        const inY = y >= regionY && y <= regionY + regionHeight
-        const nearRight = Math.abs(x - (regionX + regionWidth)) <= 6
-        const inRegion = x >= regionX && x <= regionX + regionWidth && inY
-        
-        if ((track.type === 'beat' || track.type === 'audio') && inY && nearRight) {
-          canvasRef.current.style.cursor = 'ew-resize'
-        } else if (inRegion) {
-          canvasRef.current.style.cursor = 'grab'
-        } else {
-          canvasRef.current.style.cursor = 'pointer'
-        }
+      const rects = getTrackRegionRects(track, trackIndex)
+      const hit = rects.find((r) => {
+        const inY = y >= r.regionY && y <= r.regionY + r.regionHeight
+        const inX = x >= r.regionX && x <= r.regionX + r.regionWidth
+        return inY && inX
+      })
+      const resizeHit = rects.find((r) => {
+        const inY = y >= r.regionY && y <= r.regionY + r.regionHeight
+        const nearLeft = Math.abs(x - r.regionX) <= 6
+        const nearRight = Math.abs(x - (r.regionX + r.regionWidth)) <= 6
+        return inY && (nearLeft || nearRight)
+      })
+      if (resizeHit) {
+        canvasRef.current.style.cursor = 'ew-resize'
+      } else if (hit) {
+        canvasRef.current.style.cursor = 'grab'
+      } else if (x >= SIDEBAR_WIDTH && isMidiLikeTrack(track)) {
+        canvasRef.current.style.cursor = 'copy'
       } else {
         canvasRef.current.style.cursor = 'pointer'
       }
@@ -2039,87 +2273,86 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
     if (trackIndex < 0 || trackIndex >= tracks.length) return
     
     const track = tracks[trackIndex]
-    const trackOffset = typeof trackOffsets?.[track.id] === 'number' ? trackOffsets[track.id] : 0
-    
-    // Determine region bounds for this track
-    let regionX = 0, regionWidth = 0, regionY = 0, regionHeight = 0, beats = 0
-    
-    if (track.type === 'beat') {
-      const p = trackBeats?.[track.id]
-      beats = typeof p?.lengthBeats === 'number' ? Math.max(4, p.lengthBeats) : 4
-      regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-      regionWidth = beats * beatWidth
-      regionY = trackIndex * TRACK_HEIGHT + 12
-      regionHeight = TRACK_HEIGHT - 24
-    } else if (track.type === 'audio') {
-      const rec = loadedAudioClipsRef.current?.[track.id]
-      const durationSec = rec?.buffer?.duration || 0
-      if (durationSec > 0) {
-        beats = getAudioLoopBeats(track.id, rec.buffer, bpm)
-        regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-        regionWidth = beats * beatWidth
-        regionY = trackIndex * TRACK_HEIGHT + 12
-        regionHeight = TRACK_HEIGHT - 24
-      } else {
-        return // No region to interact with
-      }
-    } else {
-      // MIDI track
-      const notes = trackNotes[track.id] || []
-      if (notes && notes.length > 0) {
-        // Find the last note end position (relative to track start)
-        const ends = notes.map(n => (n.start || 0) + (n.duration || 0))
-        const lastNoteEnd = Math.max(...ends)
-        
-        // Use manual length if set and greater than note extent
-        beats = lastNoteEnd
-        if (trackLengths && typeof trackLengths[track.id] === 'number') {
-          beats = Math.max(lastNoteEnd, trackLengths[track.id])
-        }
-        
-        regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-        regionWidth = beats * beatWidth
-        regionY = trackIndex * TRACK_HEIGHT + 12
-        regionHeight = TRACK_HEIGHT - 24
-      } else if (trackLengths && typeof trackLengths[track.id] === 'number') {
-        // No notes but has manual length - show empty region
-        beats = trackLengths[track.id]
-        regionX = SIDEBAR_WIDTH + trackOffset * beatWidth
-        regionWidth = beats * beatWidth
-        regionY = trackIndex * TRACK_HEIGHT + 12
-        regionHeight = TRACK_HEIGHT - 24
-      } else {
-        return // No notes and no manual length to interact with
-      }
-    }
-    
-    const inY = y >= regionY && y <= regionY + regionHeight
-    const nearRight = Math.abs(x - (regionX + regionWidth)) <= 6
-    const inRegion = x >= regionX && x <= regionX + regionWidth && inY
-    
-    if ((track.type === 'beat' || track.type === 'audio') && inY && nearRight) {
-      // Start resizing (beat/audio)
-      let minLen = 4
+    const rects = getTrackRegionRects(track, trackIndex)
+    const resizeHit = rects.map((r) => {
+      const inY = y >= r.regionY && y <= r.regionY + r.regionHeight
+      if (!inY) return null
+      const nearLeft = Math.abs(x - r.regionX) <= 6
+      const nearRight = Math.abs(x - (r.regionX + r.regionWidth)) <= 6
+      if (nearLeft) return { ...r, side: 'left' }
+      if (nearRight) return { ...r, side: 'right' }
+      return null
+    }).find(Boolean)
+    const hit = rects.find((r) => {
+      const inY = y >= r.regionY && y <= r.regionY + r.regionHeight
+      const inX = x >= r.regionX && x <= r.regionX + r.regionWidth
+      return inY && inX
+    })
+
+    if (resizeHit) {
+      let minLen = track.type === 'beat' ? 4 : MIN_REGION_BEATS
       if (track.type === 'audio') {
         const rec = loadedAudioClipsRef.current?.[track.id]
-        if (rec?.buffer) {
-          minLen = getAudioLoopBeats(track.id, rec.buffer, bpm)
-        }
+        if (rec?.buffer) minLen = getAudioLoopBeats(track.id, rec.buffer, bpm)
       }
-      setResizing({ trackId: track.id, trackType: track.type, startX: x, startLen: beats, currentLen: beats, minLen })
+      setResizing({
+        trackId: track.id,
+        trackType: isMidiLikeTrack(track) ? 'midi' : track.type,
+        regionId: resizeHit.id,
+        side: resizeHit.side || 'right',
+        startX: x,
+        startBeat: resizeHit.start,
+        startLen: resizeHit.duration,
+        currentStart: resizeHit.start,
+        currentLen: resizeHit.duration,
+        minLen
+      })
       e.preventDefault()
       e.stopPropagation()
-    } else if (inRegion) {
-      // Start dragging - calculate offset from region start to mouse position
-      const offsetX = x - regionX
+      return
+    }
+
+    if (hit) {
+      const offsetX = x - hit.regionX
       const offsetBeats = offsetX / beatWidth
-      setDragging({ 
-        trackId: track.id, 
-        startX: x, 
-        startBeat: trackOffset, 
-        currentBeat: trackOffset, 
-        offsetBeats: offsetBeats 
+      setDragging({
+        trackId: track.id,
+        trackType: isMidiLikeTrack(track) ? 'midi' : track.type,
+        regionId: hit.id,
+        startX: x,
+        startBeat: hit.start,
+        currentBeat: hit.start,
+        offsetBeats
       })
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (x >= SIDEBAR_WIDTH && isMidiLikeTrack(track)) {
+      const notes = trackNotes?.[track.id] || []
+      const existing = resolveRegionOverlaps(getMidiRegionsForTrack(track.id, notes))
+      const clicked = snapBeat(Math.max(0, (x - SIDEBAR_WIDTH) / beatWidth))
+      const prev = [...existing].reverse().find((r) => (r.start + r.duration) <= clicked + 0.0001) || null
+      const next = existing.find((r) => r.start > clicked + 0.0001) || null
+
+      let start = prev ? snapBeat(prev.start + prev.duration) : 0
+      let end = clicked
+      if (next) {
+        const nextStart = snapBeat(next.start)
+        // If adding between two regions, fill the whole available gap.
+        if (prev && clicked >= start - 0.0001 && clicked <= nextStart + 0.0001) {
+          end = nextStart
+        } else {
+          end = Math.min(end, nextStart)
+        }
+      }
+      if (end <= start + 0.0001) return
+
+      const duration = Math.max(MIN_REGION_BEATS, snapBeat(end - start))
+      const newRegion = { id: `r-${track.id}-${Date.now()}`, start, duration }
+      commitMidiRegions(track.id, [...existing, newRegion])
+      dragClickSuppressRef.current = true
       e.preventDefault()
       e.stopPropagation()
     }
@@ -2312,9 +2545,9 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         let maxEndBeat = 0
         const tnPlay = trackNotesRef.current || {}
         Object.entries(tnPlay).forEach(([trackId, notes = []]) => {
-          const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
-          for (const n of notes) {
-            const endBeat = (n.start || 0) + (n.duration || 0) + trackOffset
+          const regions = getMidiRegionsForTrack(trackId, notes)
+          for (const r of regions) {
+            const endBeat = r.start + r.duration
             if (endBeat > maxEndBeat) maxEndBeat = endBeat
           }
         })
@@ -2336,6 +2569,15 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
                 const defaultBeats = 4
                 const beats = typeof p.lengthBeats === 'number' ? Math.max(4, p.lengthBeats) : defaultBeats
                 const endBeat = trackOffset + beats
+                if (endBeat > maxEndBeat) maxEndBeat = endBeat
+              }
+              return
+            }
+            if (isMidiLikeTrack(t)) {
+              const notes = tnPlay[t.id] || []
+              const regions = getMidiRegionsForTrack(t.id, notes)
+              for (const r of regions) {
+                const endBeat = r.start + r.duration
                 if (endBeat > maxEndBeat) maxEndBeat = endBeat
               }
             }
@@ -2394,12 +2636,11 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
             Object.entries(trackNotesRef.current).forEach(([trackId, notes]) => {
               // Check if track should be audible (mute/solo)
               if (!isTrackAudible(Number(trackId))) return
-              
-              const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+              const regions = getMidiRegionsForTrack(trackId, notes)
               notes.forEach(note => {
-                // Apply track offset to note position
-                const noteAbsoluteStart = (note.start || 0) + trackOffset
-                const noteStartRounded = Math.round(noteAbsoluteStart * subdivisionsPerBeat) / subdivisionsPerBeat
+                const noteStart = note.start || 0
+                if (!getNoteOwnerRegionId(noteStart, regions)) return
+                const noteStartRounded = Math.round(noteStart * subdivisionsPerBeat) / subdivisionsPerBeat
                 if (Math.abs(noteStartRounded - positionRounded) < epsilon) {
                   playNote(trackId, note.note, (note.duration || 1) * beatDuration / 1000, currentBeat)
                 }
@@ -2486,16 +2727,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, tr
         const track = tracks.find(t => t.id == trackId)
         console.log(`[Export] Processing track ${trackId} (type: ${track?.type}): ${notes.length} notes`)
         
-        const trackOffset = typeof trackOffsets?.[trackId] === 'number' ? trackOffsets[trackId] : 0
+        const regions = getMidiRegionsForTrack(trackId, notes)
         notes.forEach((note) => {
-          const startBeat = (note.start || 0) + trackOffset
+          const noteStart = note.start || 0
+          if (!getNoteOwnerRegionId(noteStart, regions)) return
           const durationBeats = note.duration || 1
           const midiNote = noteNameToMidi(note.note)
           const vol = Math.max(0, Math.min(150, Number(trackVolumes?.[trackId] ?? 100)))
           const velocity = 0.8 * (vol / 100)
           notePayload.push({
             trackId: String(trackId),
-            startTime: startBeat * beatDuration,
+            startTime: noteStart * beatDuration,
             duration: durationBeats * beatDuration,
             midiNote,
             velocity,

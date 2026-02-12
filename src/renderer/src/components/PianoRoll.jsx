@@ -65,7 +65,7 @@ function noteToFrequency(noteName) {
   return 440 * Math.pow(2, halfSteps / 12)
 }
 
-function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesChange, onBack, gridWidth, setGridWidth, bpm, setBpm, selectedInstrument, onInstrumentChange, useVSTBackend = false, onVSTModeChange, samplerPath, onSamplerPathChange }) {
+function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesChange, onBack, gridWidth, setGridWidth, bpm, setBpm, selectedInstrument, onInstrumentChange, useVSTBackend = false, onVSTModeChange, samplerPath, onSamplerPathChange, timelineRegions = [], trackOffset = 0, trackLength = null }) {
   const [isPlaying, setIsPlaying] = useState(false)
   // Keep an imperative ref in sync to avoid stale-closure in rAF playhead draws
   const isPlayingRef = useRef(false)
@@ -640,6 +640,40 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
         ctx.stroke()
       }
     }
+
+    // Track-region markers from timeline (multiple clips per track)
+    const noteEnd = (notes || []).reduce((m, n) => Math.max(m, (n.start || 0) + (n.duration || 0)), 0)
+    const fallbackDuration = Math.max(1, Number.isFinite(Number(trackLength)) ? Number(trackLength) : noteEnd || 4)
+    const regions = Array.isArray(timelineRegions) && timelineRegions.length > 0
+      ? timelineRegions
+          .map((r, idx) => ({
+            id: r?.id || `r-${idx}`,
+            start: Math.max(0, Number(r?.start) || 0),
+            duration: Math.max(0.25, Number(r?.duration) || 0.25)
+          }))
+          .sort((a, b) => a.start - b.start)
+      : [{ id: `legacy-${trackId}`, start: Math.max(0, Number(trackOffset) || 0), duration: fallbackDuration }]
+    ctx.save()
+    for (const r of regions) {
+      const start = Math.max(0, Number(r?.start) || 0)
+      const duration = Math.max(0.25, Number(r?.duration) || 0.25)
+      const x = 80 + start * BEAT_WIDTH
+      const w = Math.max(2, duration * BEAT_WIDTH)
+      ctx.fillStyle = hexToRgba(trackColor || '#9ca3af', 0.18)
+      ctx.fillRect(x, 1, w, TIMELINE_HEIGHT - 2)
+      ctx.strokeStyle = hexToRgba(trackColor || '#d4d4d8', 0.85)
+      ctx.lineWidth = 1
+      ctx.strokeRect(x + 0.5, 1.5, Math.max(1, w - 1), TIMELINE_HEIGHT - 3)
+      // Strong separator at region boundary for clearer clip divisions.
+      const endX = x + w
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(endX + 0.5, 1)
+      ctx.lineTo(endX + 0.5, TIMELINE_HEIGHT - 1)
+      ctx.stroke()
+    }
+    ctx.restore()
     
     // Setup playhead canvas
     const playheadCanvas = timelinePlayheadCanvasRef.current
@@ -649,7 +683,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
       playheadCanvas.style.width = CANVAS_WIDTH + 'px'
       playheadCanvas.style.height = TIMELINE_HEIGHT + 'px'
     }
-  }, [gridWidth, gridDivision])
+  }, [gridWidth, gridDivision, notes, timelineRegions, trackOffset, trackLength, trackId, trackColor])
 
   // Helper: draw main canvas for currently visible horizontal region only
   // If OffscreenCanvas is available, this posts a draw request to the worker; otherwise draws on main thread.
@@ -764,6 +798,28 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     ctx.stroke()
     ctx.restore()
 
+    // Extend region separators down the piano roll as dotted lines.
+    const noteEnd = (notes || []).reduce((m, n) => Math.max(m, (n.start || 0) + (n.duration || 0)), 0)
+    const fallbackDuration = Math.max(1, Number.isFinite(Number(trackLength)) ? Number(trackLength) : noteEnd || 4)
+    const regions = Array.isArray(timelineRegions) && timelineRegions.length > 0
+      ? timelineRegions
+      : [{ id: `legacy-${trackId}`, start: Math.max(0, Number(trackOffset) || 0), duration: fallbackDuration }]
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 4])
+    for (const r of regions) {
+      const start = Math.max(0, Number(r?.start) || 0)
+      const duration = Math.max(0.25, Number(r?.duration) || 0.25)
+      const endX = 80 + (start + duration) * BEAT_WIDTH
+      if (endX < drawLeft || endX > drawRight) continue
+      ctx.beginPath()
+      ctx.moveTo(endX + 0.5, 0)
+      ctx.lineTo(endX + 0.5, CANVAS_HEIGHT)
+      ctx.stroke()
+    }
+    ctx.restore()
+
     // Draw notes within the visible slice (with margin)
     const hiddenSet = new Set(hiddenNoteIds)
     const selSet = new Set(selectedNoteIds)
@@ -792,7 +848,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
       ctx.fillRect(lineX, lineY, RESIZE_HANDLE_LINE, NOTE_HEIGHT - 12)
     }
     })
-  }, [notes, gridWidth, gridDivision, hiddenNoteIds, selectedNoteIds, trackColor])
+  }, [notes, gridWidth, gridDivision, hiddenNoteIds, selectedNoteIds, trackColor, timelineRegions, trackOffset, trackLength, trackId])
 
   // Initialize Offscreen worker (if supported) and set canvas size; always draw only visible region
   useEffect(() => {
@@ -986,7 +1042,12 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
       // Fallback path
       drawMainCanvas()
     }
-  }, [notes, trackColor, gridDivision, selectedNoteIds, selectionMode, hiddenNoteIds])
+  }, [notes, trackColor, gridDivision, selectedNoteIds, selectionMode, hiddenNoteIds, timelineRegions, trackOffset, trackLength, trackId])
+
+  // Ensure separator lines update immediately when timeline regions change.
+  useEffect(() => {
+    drawMainCanvas()
+  }, [timelineRegions, trackOffset, trackLength, trackId, drawMainCanvas])
 
   // Throttle scroll-driven redraws without React state churn
   useEffect(() => {

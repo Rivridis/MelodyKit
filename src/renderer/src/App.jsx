@@ -38,6 +38,26 @@ const TRACK_COLORS = [
   '#dee12e', '#f59e0b', '#10b981', '#3b82f6', 
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 ]
+const MIN_REGION_BEATS = 0.25
+const snapBeat = (beat) => Math.round(beat * 4) / 4
+const ceilBeat = (beat) => Math.ceil(beat * 4) / 4
+const floorBeat = (beat) => Math.floor(beat * 4) / 4
+
+const normalizeRegions = (regions = []) => {
+  return regions
+    .map((r, idx) => {
+      const start = Number(r?.start)
+      const duration = Number(r?.duration)
+      if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) return null
+      return {
+        id: r?.id || `r-${idx}`,
+        start: Math.max(0, snapBeat(start)),
+        duration: Math.max(MIN_REGION_BEATS, snapBeat(duration))
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start)
+}
 
 function App() {
   const [tracks, setTracks] = useState([])
@@ -48,6 +68,7 @@ function App() {
   const [trackBeats, setTrackBeats] = useState({}) // { trackId: { steps, rows: [{id,name,filePath,fileUrl,steps:boolean[]}]} }
   const [trackOffsets, setTrackOffsets] = useState({}) // { trackId: startBeat } - timeline offset for all tracks
   const [trackLengths, setTrackLengths] = useState({}) // { trackId: lengthBeats } - manual length for MIDI/audio tracks
+  const [trackRegions, setTrackRegions] = useState({}) // { trackId: [{ id, start, duration }] } - timeline regions (MIDI-style clips)
   const [trackVSTMode, setTrackVSTMode] = useState({}) // { trackId: boolean } - whether track uses VST backend
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
   const [trackVSTPresets, setTrackVSTPresets] = useState({}) // { trackId: base64State } - VST plugin preset state
@@ -116,6 +137,10 @@ function App() {
       ...prev,
       [id]: false
     }))
+    setTrackRegions(prev => ({
+      ...prev,
+      [id]: [{ id: `r-${id}-0`, start: 0, duration: 4 }]
+    }))
     // Default mute/solo off
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))
@@ -137,6 +162,7 @@ function App() {
     setTrackVolumes((prev) => ({ ...prev, [id]: 100 }))
     setTrackBeats((prev) => ({ ...prev, [id]: { steps: 16, rows: [], packName } }))
     setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
+    setTrackRegions(prev => ({ ...prev, [id]: [] }))
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))
     // Do not auto-open sequencer; stay on current view
@@ -157,6 +183,7 @@ function App() {
     setTrackVolumes((prev) => ({ ...prev, [id]: 100 }))
     setTrackNotes(prev => ({ ...prev, [id]: [] }))
     setTrackOffsets((prev) => ({ ...prev, [id]: 0 }))
+    setTrackRegions(prev => ({ ...prev, [id]: [{ id: `r-${id}-0`, start: 0, duration: 4 }] }))
     setTrackMuted(prev => ({ ...prev, [id]: false }))
     setTrackSoloed(prev => ({ ...prev, [id]: false }))
     return id
@@ -299,14 +326,17 @@ function App() {
       setTrackVolumes(newVolumes)
       // Set default offsets
       const newOffsets = { ...trackOffsets }
+      const newRegions = { ...trackRegions }
       const newMuted = { ...trackMuted }
       const newSoloed = { ...trackSoloed }
       newTracks.forEach(t => {
         newOffsets[t.id] = 0
+        newRegions[t.id] = []
         newMuted[t.id] = false
         newSoloed[t.id] = false
       })
       setTrackOffsets(newOffsets)
+      setTrackRegions(newRegions)
       setTrackMuted(newMuted)
       setTrackSoloed(newSoloed)
       setIsImportingAudio(false)
@@ -336,6 +366,9 @@ function App() {
   const newTrackOffsets = { ...trackOffsets }
   delete newTrackOffsets[trackId]
   setTrackOffsets(newTrackOffsets)
+  const newTrackRegions = { ...trackRegions }
+  delete newTrackRegions[trackId]
+  setTrackRegions(newTrackRegions)
   const newTrackMuted = { ...trackMuted }
   delete newTrackMuted[trackId]
   setTrackMuted(newTrackMuted)
@@ -428,6 +461,11 @@ function App() {
     setTrackVolumes(prev => ({ ...prev, [newId]: trackVolumes[trackId] ?? 100 }))
     setTrackOffsets(prev => ({ ...prev, [newId]: trackOffsets[trackId] ?? 0 }))
     setTrackLengths(prev => ({ ...prev, [newId]: trackLengths[trackId] }))
+    setTrackRegions(prev => {
+      const src = Array.isArray(prev?.[trackId]) ? prev[trackId] : []
+      const copied = src.map((r, idx) => ({ ...r, id: r?.id || `r-${newId}-${idx}` }))
+      return { ...prev, [newId]: copied }
+    })
     setTrackMuted(prev => ({ ...prev, [newId]: trackMuted[trackId] ?? false }))
     setTrackSoloed(prev => ({ ...prev, [newId]: trackSoloed[trackId] ?? false }))
     
@@ -753,6 +791,7 @@ function App() {
       trackVolumes,
       trackOffsets,
       trackLengths: currentTrackLengths,
+      trackRegions,
       trackVSTMode,
       trackVSTPlugins,
       trackVSTPresets: capturedVSTPresets,
@@ -842,6 +881,7 @@ function App() {
       const nextTrackVSTMode = (p.trackVSTMode && typeof p.trackVSTMode === 'object') ? p.trackVSTMode : {}
       const nextTrackVSTPlugins = (p.trackVSTPlugins && typeof p.trackVSTPlugins === 'object') ? p.trackVSTPlugins : {}
       const nextTrackVSTPresets = (p.trackVSTPresets && typeof p.trackVSTPresets === 'object') ? p.trackVSTPresets : {}
+      const nextTrackRegions = (p.trackRegions && typeof p.trackRegions === 'object') ? p.trackRegions : {}
       const nextTrackSamplerPaths = (p.trackSamplerPaths && typeof p.trackSamplerPaths === 'object') ? p.trackSamplerPaths : {}
       const nextTrackMuted = (p.trackMuted && typeof p.trackMuted === 'object') ? p.trackMuted : {}
       const nextTrackSoloed = (p.trackSoloed && typeof p.trackSoloed === 'object') ? p.trackSoloed : {}
@@ -899,6 +939,20 @@ function App() {
         acc[t.id] = typeof nextTrackOffsets[t.id] === 'number' ? nextTrackOffsets[t.id] : 0
         return acc
       }, {})
+
+      const regionsWithDefaults = recomputedTracks.reduce((acc, t) => {
+        const src = Array.isArray(nextTrackRegions[t.id]) ? nextTrackRegions[t.id] : []
+        acc[t.id] = src
+          .map((r, idx) => {
+            const start = Number(r?.start)
+            const duration = Number(r?.duration)
+            if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) return null
+            return { id: r?.id || `r-${t.id}-${idx}`, start: Math.max(0, start), duration: Math.max(0.25, duration) }
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.start - b.start)
+        return acc
+      }, {})
       
       const mutedWithDefaults = recomputedTracks.reduce((acc, t) => {
         acc[t.id] = typeof nextTrackMuted[t.id] === 'boolean' ? nextTrackMuted[t.id] : false
@@ -927,6 +981,7 @@ function App() {
       setTrackBeats(nextTrackBeats)
       setTrackVolumes(volumesWithDefaults)
       setTrackOffsets(offsetsWithDefaults)
+      setTrackRegions(regionsWithDefaults)
       setTrackMuted(mutedWithDefaults)
       setTrackSoloed(soloedWithDefaults)
       setTrackAutomation(nextTrackAutomation)
@@ -1081,6 +1136,86 @@ function App() {
   const autosaveTimerRef = useRef(null)
   const lastSaveDataRef = useRef(null)
   const isSavingRef = useRef(false)
+
+  // Keep MIDI/sampler timeline regions expanding live even while PianoRoll is open.
+  useEffect(() => {
+    const lengthUpdates = {}
+    let didRegionChange = false
+
+    setTrackRegions((prev) => {
+      const next = { ...prev }
+
+      tracks.forEach((track) => {
+        const isMidiLike = track?.type !== 'audio' && track?.type !== 'beat'
+        if (!isMidiLike) return
+        const notes = trackNotes?.[track.id] || []
+        if (!notes.length) return
+
+        const explicit = normalizeRegions(prev?.[track.id] || [])
+        if (explicit.length > 0) {
+          const updated = explicit.map((r) => ({ ...r }))
+          let changed = false
+
+          for (const n of notes) {
+            const nStart = n.start || 0
+            const nEnd = (n.start || 0) + (n.duration || 0)
+            let idx = -1
+            for (let i = 0; i < updated.length; i++) {
+              if (updated[i].start <= nStart + 0.0001) idx = i
+              else break
+            }
+            if (idx < 0) idx = 0
+            const r = updated[idx]
+            const prevRegion = idx > 0 ? updated[idx - 1] : null
+            const nextRegion = updated[idx + 1]
+
+            // Backward expansion only when there is no region before this one.
+            if (!prevRegion && nStart < r.start - 0.0001) {
+              let newStart = Math.max(0, floorBeat(nStart))
+              const maxStart = nextRegion
+                ? Math.max(0, nextRegion.start - MIN_REGION_BEATS)
+                : Number.POSITIVE_INFINITY
+              if (Number.isFinite(maxStart)) newStart = Math.min(newStart, maxStart)
+              if (newStart < r.start - 0.0001) {
+                const oldEnd = r.start + r.duration
+                r.start = newStart
+                r.duration = Math.max(MIN_REGION_BEATS, ceilBeat(oldEnd - newStart))
+                changed = true
+              }
+            }
+
+            const maxEnd = nextRegion ? nextRegion.start : Number.POSITIVE_INFINITY
+            const targetEnd = Math.min(nEnd, maxEnd)
+            if (targetEnd <= r.start + 0.0001) continue
+            const needed = Math.max(MIN_REGION_BEATS, ceilBeat(targetEnd - r.start))
+            if (needed > r.duration + 0.0001) {
+              r.duration = needed
+              changed = true
+            }
+          }
+
+          if (changed) {
+            next[track.id] = updated
+            didRegionChange = true
+          }
+          return
+        }
+
+        const noteEnd = Math.max(...notes.map((nn) => (nn.start || 0) + (nn.duration || 0)))
+        if (!(noteEnd > 0)) return
+        const currentLen = typeof trackLengths?.[track.id] === 'number' ? trackLengths[track.id] : 0
+        if (noteEnd > currentLen + 0.0001) {
+          lengthUpdates[track.id] = Math.max(MIN_REGION_BEATS, ceilBeat(noteEnd))
+        }
+      })
+
+      return didRegionChange ? next : prev
+    })
+
+    if (Object.keys(lengthUpdates).length > 0) {
+      setTrackLengths((prev) => ({ ...prev, ...lengthUpdates }))
+    }
+  }, [tracks, trackNotes, trackLengths, setTrackRegions, setTrackLengths])
   
   useEffect(() => {
     if (!currentProjectPath || isRestoring) return
@@ -1135,7 +1270,7 @@ function App() {
         clearTimeout(autosaveTimerRef.current)
       }
     }
-  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackVSTMode, trackVSTPlugins, trackVSTPresets, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
+  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackRegions, trackVSTMode, trackVSTPlugins, trackVSTPresets, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
 
   const timelineRef = useRef(null)
 
@@ -1149,6 +1284,7 @@ function App() {
           setTracks([])
           setTrackNotes({})
           setTrackInstruments({})
+          setTrackRegions({})
           setSelectedTrackId(null)
           setCurrentProjectPath(null)
           setIsLoading(false)
@@ -1300,6 +1436,9 @@ function App() {
                 onSamplerPathChange={(path) => {
                   setTrackSamplerPaths({ ...trackSamplerPaths, [selectedTrack.id]: path })
                 }}
+                timelineRegions={trackRegions[selectedTrack.id] || []}
+                trackOffset={trackOffsets[selectedTrack.id] || 0}
+                trackLength={trackLengths[selectedTrack.id]}
               />
             )
           ) : (
@@ -1307,6 +1446,7 @@ function App() {
               ref={timelineRef}
               tracks={tracks}
               trackNotes={trackNotes}
+              setTrackNotes={setTrackNotes}
               trackBeats={trackBeats}
               setTrackBeats={setTrackBeats}
               trackInstruments={trackInstruments}
@@ -1316,6 +1456,8 @@ function App() {
               setTrackOffsets={setTrackOffsets}
               trackLengths={trackLengths}
               setTrackLengths={setTrackLengths}
+              trackRegions={trackRegions}
+              setTrackRegions={setTrackRegions}
               trackVSTMode={trackVSTMode}
               trackVSTLoading={trackVSTLoading}
               trackMuted={trackMuted}
