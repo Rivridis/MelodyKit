@@ -3,7 +3,6 @@ import { stopAllNotes } from '../utils/soundfontPlayer'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
 import { playBackendNote, noteNameToMidi, loadSF2, playSamplerNote, stopSamplerNote } from '@renderer/utils/vstBackend'
 import { encodeToWav } from '@renderer/utils/fastWav'
-import AutomationLane from './AutomationLane'
 
 const BEAT_WIDTH = 40
 const TRACK_HEIGHT = 80
@@ -125,7 +124,7 @@ function getNoteOwnerRegionId(noteStart, regions = []) {
 
 const sharedAudioClipCache = {}
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onAutomationChange, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -3291,47 +3290,6 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
                       />
                       <span className="text-xs text-zinc-300 select-none" style={{ pointerEvents: 'auto', width: 34, textAlign: 'right' }}>{value}%</span>
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
-              
-              {/* Automation Overlays */}
-              <div style={{ position: 'absolute', left: 0, top: 0, width: gridWidth * beatWidth + SIDEBAR_WIDTH, height: CANVAS_HEIGHT, pointerEvents: 'none' }}>
-                {tracks.map((track, index) => {
-                  const automation = trackAutomation?.[track.id]
-                  if (!automation?.enabled) return null
-                  
-                  const y = index * TRACK_HEIGHT
-                  
-                  return (
-                    <div
-                      key={`automation-${track.id}`}
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: y,
-                        width: gridWidth * beatWidth + SIDEBAR_WIDTH,
-                        height: TRACK_HEIGHT,
-                        pointerEvents: 'auto'
-                      }}
-                    >
-                      <AutomationLane
-                        trackId={track.id}
-                        automationType={automation.type}
-                        beatWidth={BEAT_WIDTH}
-                        zoom={zoom}
-                        trackColor={track.color}
-                        points={automation.data?.[automation.type] || []}
-                        onPointsChange={(newPoints) => {
-                          const newData = { ...automation.data }
-                          newData[automation.type] = newPoints
-                          onAutomationChange?.(track.id, { ...automation, data: newData })
-                        }}
-                        onClose={() => {
-                          onAutomationChange?.(track.id, { ...automation, enabled: false })
-                        }}
-                      />
                     </div>
                   )
                 })}
