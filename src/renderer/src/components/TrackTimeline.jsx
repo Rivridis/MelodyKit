@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react'
+import { useRef, useEffect, useLayoutEffect, useState, forwardRef, useImperativeHandle } from 'react'
 import { stopAllNotes } from '../utils/soundfontPlayer'
 import { getSharedAudioContext } from '@renderer/utils/audioContext'
 import { playBackendNote, noteNameToMidi, loadSF2, playSamplerNote, stopSamplerNote } from '@renderer/utils/vstBackend'
@@ -468,7 +468,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
   useEffect(() => { trackAutomationRef.current = trackAutomation }, [trackAutomation])
 
   // Auto-expand timeline when notes extend beyond the current grid (Logic/GarageBand style)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!setGridWidth) return
     let maxEndBeat = 0
     const notesByTrack = trackNotes || {}
