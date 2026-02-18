@@ -17,6 +17,7 @@ const TIMELINE_HEIGHT = 24 // px
 const CANVAS_HEIGHT = NOTES.length * OCTAVES.length * NOTE_HEIGHT
 const OFFSCREEN_READY_TIMEOUT_MS = 250 // fast fallback to avoid blank canvas while worker warms up
 const ENABLE_OFFSCREEN_CANVAS = false // disable OffscreenCanvas to avoid GPU driver instability
+let sessionGridDivision = 4 // session-only memory for piano roll grid division
 
 // Utility: convert #RRGGBB to rgba(r,g,b,a)
 function hexToRgba(hex, alpha = 1) {
@@ -94,7 +95,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
   const dragLayerRef = useRef(null)
   const dragDomCacheRef = useRef(new Map()) // id -> HTMLElement for preview notes
   const [bpmInput, setBpmInput] = useState(bpm.toString())
-  const [gridDivision, setGridDivision] = useState(4) // 4 = quarter notes, 8 = eighth notes, 16 = sixteenth notes
+  const [gridDivision, setGridDivision] = useState(sessionGridDivision) // 4 = quarter notes, 8 = eighth notes, 16 = sixteenth notes
   const [lastNoteDuration, setLastNoteDuration] = useState(null) // Remember last placed/resized note duration
   const [spessaInstrument, setSpessaInstrument] = useState(null) // Store loaded spessasynth instrument
   const [instrumentLoading, setInstrumentLoading] = useState(false) // Track loading state
@@ -259,6 +260,11 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
   // Mirror playing state to ref for paint functions outside React's render timing
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
   useEffect(() => { modeRef.current = mode }, [mode])
+  useEffect(() => {
+    if (gridDivision === 4 || gridDivision === 8 || gridDivision === 16) {
+      sessionGridDivision = gridDivision
+    }
+  }, [gridDivision])
 
   // Enforce mode invariants: stop playback in edit mode, clear edit interactions when switching to play
   useEffect(() => {
