@@ -798,28 +798,6 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
     ctx.stroke()
     ctx.restore()
 
-    // Extend region separators down the piano roll as dotted lines.
-    const noteEnd = (notes || []).reduce((m, n) => Math.max(m, (n.start || 0) + (n.duration || 0)), 0)
-    const fallbackDuration = Math.max(1, Number.isFinite(Number(trackLength)) ? Number(trackLength) : noteEnd || 4)
-    const regions = Array.isArray(timelineRegions) && timelineRegions.length > 0
-      ? timelineRegions
-      : [{ id: `legacy-${trackId}`, start: Math.max(0, Number(trackOffset) || 0), duration: fallbackDuration }]
-    ctx.save()
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)'
-    ctx.lineWidth = 1
-    ctx.setLineDash([2, 4])
-    for (const r of regions) {
-      const start = Math.max(0, Number(r?.start) || 0)
-      const duration = Math.max(0.25, Number(r?.duration) || 0.25)
-      const endX = 80 + (start + duration) * BEAT_WIDTH
-      if (endX < drawLeft || endX > drawRight) continue
-      ctx.beginPath()
-      ctx.moveTo(endX + 0.5, 0)
-      ctx.lineTo(endX + 0.5, CANVAS_HEIGHT)
-      ctx.stroke()
-    }
-    ctx.restore()
-
     // Draw notes within the visible slice (with margin)
     const hiddenSet = new Set(hiddenNoteIds)
     const selSet = new Set(selectedNoteIds)
