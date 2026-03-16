@@ -5,8 +5,8 @@ Console JUCE host that loads a VST/VST3 instrument, accepts simple text commands
 ## Build (Windows)
 1. Install CMake and a recent MSVC toolchain (Visual Studio 2022 recommended).
 2. From the repository root run:
-   - `cmake -B Backend/build -S Backend -G "Visual Studio 17 2022"`
-   - `cmake --build Backend/build --config Release`
+- cmake -B Backend/build -S Backend -G "Visual Studio 18 2026"
+- cmake --build Backend/build --config Release
 3. The binary `Backend.exe` is emitted directly under `Backend/` so Electron can find it.
 
 ## Commands (stdin)
