@@ -32,10 +32,7 @@ function Sidebar({
   const [activeTab, setActiveTab] = useState('tracks')
   const [packsLoading, setPacksLoading] = useState(false)
   const [packInstruments, setPackInstruments] = useState([])
-  const [sequencerPacks, setSequencerPacks] = useState([])
-  const [sequencerSoundsByPack, setSequencerSoundsByPack] = useState({})
   const [expandedInstrumentCategory, setExpandedInstrumentCategory] = useState(null)
-  const [expandedSequencerPack, setExpandedSequencerPack] = useState(null)
   const [loopPacks, setLoopPacks] = useState([])
   const [loopSoundsByPack, setLoopSoundsByPack] = useState({})
   const [expandedLoopPack, setExpandedLoopPack] = useState(null)
@@ -93,30 +90,23 @@ function Sidebar({
     const load = async () => {
       setPacksLoading(true)
       try {
-        if (!window.api?.getInstruments || !window.api?.sequencer?.listPacks) {
+        if (!window.api?.getInstruments) {
           setPackInstruments([])
-          setSequencerPacks([])
-          setSequencerSoundsByPack({})
           setLoopPacks([])
           setLoopSoundsByPack({})
           setPacksLoading(false)
           return
         }
         const instruments = await window.api.getInstruments()
-        const packs = await window.api.sequencer.listPacks()
         const loops = await window.api?.loops?.listPacks?.()
         if (!mounted) return
         setPackInstruments(instruments || [])
-        setSequencerPacks(packs || [])
-        setSequencerSoundsByPack({})
         setLoopPacks(loops || [])
         setLoopSoundsByPack({})
       } catch (e) {
         console.error('Failed to load packs view:', e)
         if (!mounted) return
         setPackInstruments([])
-        setSequencerPacks([])
-        setSequencerSoundsByPack({})
         setLoopPacks([])
         setLoopSoundsByPack({})
       } finally {
@@ -375,56 +365,6 @@ function Sidebar({
                                       {i.name}
                                     </button>
                                   ))}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <div className="h-3" />
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Sequencer Packs</div>
-                  <div className="h-3" />
-                  {sequencerPacks.length === 0 ? (
-                    <div className="text-zinc-500 text-sm">No packs found.</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {sequencerPacks.map((pack) => {
-                        const isExpanded = expandedSequencerPack === pack
-                        const sounds = sequencerSoundsByPack[pack] || []
-                        return (
-                          <div key={pack}>
-                            <button
-                              onClick={async () => {
-                                const next = isExpanded ? null : pack
-                                setExpandedSequencerPack(next)
-                                if (next && !sequencerSoundsByPack[pack]) {
-                                  const list = await window.api?.sequencer?.listSounds?.(pack)
-                                  setSequencerSoundsByPack((prev) => ({ ...prev, [pack]: list || [] }))
-                                }
-                              }}
-                              className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                                isExpanded
-                                  ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-zinc-900/40 text-amber-100'
-                                  : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800/70'
-                              }`}
-                            >
-                              <span>{pack}</span>
-                              <span className="text-zinc-500">{isExpanded ? '−' : '+'}</span>
-                            </button>
-                            {isExpanded && (
-                              <div className="mt-3 flex flex-col gap-1 pl-2">
-                                {(sounds || []).map((s) => (
-                                  <div
-                                    key={`${pack}:${s.fileName}`}
-                                    className="w-full rounded-md border border-zinc-700/70 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200"
-                                    title={s.filePath}
-                                  >
-                                    {s.name}
-                                  </div>
-                                ))}
                               </div>
                             )}
                           </div>
