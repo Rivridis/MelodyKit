@@ -3046,7 +3046,17 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
         {/* Loop controls */}
         <div className="flex items-center gap-2 ml-2 border-l border-zinc-700 pl-3">
           <button
-            onClick={() => setKnifeToolEnabled((v) => !v)}
+            onClick={() => {
+              setKnifeToolEnabled((v) => {
+                const newState = !v
+                // Clear suppression flags when disabling knife tool
+                if (v && !newState) {
+                  dragClickSuppressRef.current = false
+                  resizeClickSuppressRef.current = false
+                }
+                return newState
+              })
+            }}
             className={`inline-flex items-center justify-center h-9 px-3 rounded-md transition-colors text-sm font-medium ${
               knifeToolEnabled
                 ? 'bg-sky-600 hover:bg-sky-500 text-white'
