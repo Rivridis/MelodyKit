@@ -124,7 +124,7 @@ function getNoteOwnerRegionId(noteStart, regions = []) {
 
 const sharedAudioClipCache = {}
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone, onOpenNodeGraph }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackVSTReady, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone, onOpenNodeGraph }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -691,7 +691,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
       
       // Update VST track volume via MIDI CC
       const isVST = trackVSTMode?.[trackId]
-      if (isVST) {
+      if (isVST && trackVSTReady?.[trackId]) {
         // Map 0-150% to MIDI 0-127 range, then reduce by 50% for VST loudness
         const volPercent = Math.max(0, Math.min(150, Number(vol) || 100))
         const midiVolume = Math.round((volPercent / 150) * 127 * 0.5)
@@ -700,7 +700,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
         })
       }
     })
-  }, [trackVolumes, trackVSTMode])
+  }, [trackVolumes, trackVSTMode, trackVSTReady])
 
   // Decode imported audio clips for this AudioContext
   useEffect(() => {

@@ -15,7 +15,10 @@ export function initBackend() {
     } else if (line.startsWith('EVENT READY_SF2') || line.startsWith('EVENT LOADED_SF2')) {
       backendReady = true
     } else if (line.startsWith('ERROR')) {
-      console.error('[Backend]', line)
+      // ERROR GET_STATE is an expected probe response (used to detect unloaded plugins), not a real error
+      if (!line.includes('ERROR GET_STATE')) {
+        console.error('[Backend]', line)
+      }
     }
   })
 }

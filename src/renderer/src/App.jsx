@@ -74,6 +74,7 @@ function App() {
   const [trackVSTPlugins, setTrackVSTPlugins] = useState({}) // { trackId: vstPath } - loaded VST plugin paths
   const [trackVSTPresets, setTrackVSTPresets] = useState({}) // { trackId: base64State } - VST plugin preset state
   const [trackVSTLoading, setTrackVSTLoading] = useState({}) // { trackId: boolean } - track VST is currently loading
+  const [trackVSTReady, setTrackVSTReady] = useState({}) // { trackId: boolean } - track VST is fully loaded and ready
   const [trackSamplerPaths, setTrackSamplerPaths] = useState({}) // { trackId: filePath } - sampler track sample file paths
   const [trackMuted, setTrackMuted] = useState({}) // { trackId: boolean } - track mute status
   const [trackSoloed, setTrackSoloed] = useState({}) // { trackId: boolean } - track solo status
@@ -394,6 +395,9 @@ function App() {
   const newTrackVSTLoading = { ...trackVSTLoading }
   delete newTrackVSTLoading[trackId]
   setTrackVSTLoading(newTrackVSTLoading)
+  const newTrackVSTReady = { ...trackVSTReady }
+  delete newTrackVSTReady[trackId]
+  setTrackVSTReady(newTrackVSTReady)
     // Clear backend beat resources if this was a beat track
     window.api?.backend?.clearBeat?.(String(trackId)).catch(() => {})
     
@@ -503,13 +507,14 @@ function App() {
   }
 
   // Auto-load VST plugins when trackVSTPlugins or trackVSTMode changes
+  const vstLoadingRef = useRef({})
   useEffect(() => {
     if (isRestoring) return // Don't interfere with project loading
     
     const loadVSTsForNewTracks = async () => {
       for (const [trackId, vstPath] of Object.entries(trackVSTPlugins)) {
-        // Skip if already loading
-        if (trackVSTLoading[trackId]) {
+        // Skip if already loading (use ref to avoid dep-array feedback loop)
+        if (vstLoadingRef.current[trackId]) {
           console.log(`[Auto-Load] Track ${trackId} already loading, skipping...`)
           continue
         }
@@ -529,72 +534,63 @@ function App() {
             if (checkResult.startsWith(`ERROR GET_STATE ${trackId}`)) {
               console.log(`[Auto-Load] VST not loaded for track ${trackId}, loading now...`)
               
-              // Mark as loading
+              vstLoadingRef.current[trackId] = true
               setTrackVSTLoading(prev => ({ ...prev, [trackId]: true }))
+              setTrackVSTReady(prev => ({ ...prev, [trackId]: false }))
               
               try {
-                // Wait for both LOADED and READY events
-                const loadEventPromise = waitForBackendEvent(
-                  (line) => line.startsWith(`EVENT LOADED ${trackId} `) || line.startsWith(`ERROR LOAD ${trackId}`),
-                  15000
-                )
-                
+                // Backend emits EVENT READY on success or ERROR LOAD on failure
                 const readyEventPromise = waitForBackendEvent(
-                  (line) => line.startsWith(`EVENT READY ${trackId} `),
+                  (line) => line.startsWith(`EVENT READY ${trackId} `) || line.startsWith(`ERROR LOAD ${trackId}`),
                   20000
                 )
                 
                 const loadResult = await window.api?.backend?.loadVST?.(trackId, vstPath)
                 
                 if (loadResult && loadResult.ok) {
-                  const loadEvent = await loadEventPromise
-                  if (loadEvent.startsWith(`EVENT LOADED ${trackId}`)) {
-                    console.log(`[Auto-Load] VST LOADED event received for track ${trackId}`)
+                  const readyEvent = await readyEventPromise
+                  if (readyEvent.startsWith(`EVENT READY ${trackId}`)) {
+                    console.log(`[Auto-Load] ✓ VST READY for track ${trackId}`)
+                    setTrackVSTReady(prev => ({ ...prev, [trackId]: true }))
                     
-                    // Wait for READY event (plugin fully initialized)
-                    const readyEvent = await readyEventPromise
-                    if (readyEvent.startsWith(`EVENT READY ${trackId}`)) {
-                      console.log(`[Auto-Load] ✓ VST READY for track ${trackId}`)
-                      
-                      // Small delay to ensure all React state updates have propagated
-                      await new Promise(resolve => setTimeout(resolve, 100))
-                      
-                      // Check for preset again in case it was just set
-                      const presetData = trackVSTPresets[trackId]
-                      if (presetData) {
-                        console.log(`[Auto-Load] Found preset for track ${trackId}, applying... (length: ${presetData.length})`)
-                        try {
-                          const stateEventPromise = waitForBackendEvent(
-                            (line) => line.startsWith(`EVENT STATE_SET ${trackId}`) || line.startsWith(`ERROR SET_STATE ${trackId}`),
-                            15000
-                          )
-                          
-                          await window.api?.backend?.setVSTState?.(trackId, presetData)
-                          const stateEvent = await stateEventPromise
-                          
-                          if (stateEvent.startsWith(`EVENT STATE_SET ${trackId}`)) {
-                            console.log(`[Auto-Load] ✓ VST preset applied for track ${trackId}`)
-                          } else {
-                            console.error(`[Auto-Load] ✗ Failed to apply preset for track ${trackId}:`, stateEvent)
-                          }
-                        } catch (err) {
-                          console.error(`[Auto-Load] Failed to apply preset for track ${trackId}:`, err)
+                    // Check for preset and apply it
+                    const presetData = trackVSTPresets[trackId]
+                    if (presetData) {
+                      console.log(`[Auto-Load] Found preset for track ${trackId}, applying... (length: ${presetData.length})`)
+                      try {
+                        const stateEventPromise = waitForBackendEvent(
+                          (line) => line.startsWith(`EVENT STATE_SET ${trackId}`) || line.startsWith(`ERROR SET_STATE ${trackId}`),
+                          15000
+                        )
+                        
+                        await window.api?.backend?.setVSTState?.(trackId, presetData)
+                        const stateEvent = await stateEventPromise
+                        
+                        if (stateEvent.startsWith(`EVENT STATE_SET ${trackId}`)) {
+                          console.log(`[Auto-Load] ✓ VST preset applied for track ${trackId}`)
+                        } else {
+                          console.error(`[Auto-Load] ✗ Failed to apply preset for track ${trackId}:`, stateEvent)
                         }
-                      } else {
-                        console.warn(`[Auto-Load] No preset found for track ${trackId}, VST will use default state`)
+                      } catch (err) {
+                        console.error(`[Auto-Load] Failed to apply preset for track ${trackId}:`, err)
                       }
+                    } else {
+                      console.warn(`[Auto-Load] No preset found for track ${trackId}, VST will use default state`)
                     }
+                  } else {
+                    console.error(`[Auto-Load] ✗ VST load failed for track ${trackId}:`, readyEvent)
                   }
                 }
               } catch (err) {
                 console.error(`[Auto-Load] Failed to load VST for track ${trackId}:`, err)
               } finally {
-                // Clear loading state
+                vstLoadingRef.current[trackId] = false
                 setTrackVSTLoading(prev => ({ ...prev, [trackId]: false }))
               }
             } else {
               // VST is already loaded
               console.log(`[Auto-Load] VST already loaded for track ${trackId}`)
+              setTrackVSTReady(prev => ({ ...prev, [trackId]: true }))
             }
           } catch (err) {
             // Timeout or error checking - might need to load
@@ -605,7 +601,7 @@ function App() {
     }
     
     loadVSTsForNewTracks()
-  }, [trackVSTPlugins, trackVSTMode, trackVSTPresets, trackVSTLoading, isRestoring])
+  }, [trackVSTPlugins, trackVSTMode, trackVSTPresets, isRestoring])
 
   // Update notes for a track
   const handleNotesChange = (trackId, notes) => {
@@ -1381,6 +1377,7 @@ function App() {
           trackVSTMode={trackVSTMode}
           trackVSTPlugins={trackVSTPlugins}
           trackVSTLoading={trackVSTLoading}
+          trackVSTReady={trackVSTReady}
           trackSamplerPaths={trackSamplerPaths}
           onCreateInstrumentTrack={handleCreateInstrumentTrack}
           onCreateLoopTrack={handleCreateLoopTrack}
@@ -1498,6 +1495,7 @@ function App() {
               setTrackRegions={setTrackRegions}
               trackVSTMode={trackVSTMode}
               trackVSTLoading={trackVSTLoading}
+              trackVSTReady={trackVSTReady}
               trackMuted={trackMuted}
               setTrackMuted={setTrackMuted}
               trackSoloed={trackSoloed}
