@@ -7,6 +7,7 @@ import SequencerPanel from './components/SequencerPanel'
 import AddTrackModal from './components/AddTrackModal'
 import { initBackend } from './utils/vstBackend'
 import { loadSF2 } from './utils/vstBackend'
+import { NodeGraph, useNodeGraph } from './components/NodeGraph'
 
 // Helper to wait for backend response via event stream
 const waitForBackendEvent = (matchPattern, timeoutMs = 5000) => {
@@ -92,8 +93,12 @@ function App() {
   const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
   const [showWelcome, setShowWelcome] = useState(true)
   const [showAddTrackModal, setShowAddTrackModal] = useState(false)
+  const [showNodeGraph, setShowNodeGraph] = useState(false) // Toggle between timeline and node graph view
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
+
+  // Initialize node graph hook
+  const nodeGraphState = useNodeGraph(tracks)
 
   // Initialize VST backend on mount
   useEffect(() => {
@@ -104,6 +109,11 @@ function App() {
   useEffect(() => {
     if (tracks.length > 0) setShowWelcome(false)
   }, [tracks.length])
+
+  // Initialize node graph track nodes when tracks change
+  useEffect(() => {
+    nodeGraphState.initializeTrackNodes()
+  }, [tracks])
 
   // Add new track
   const handleAddTrack = () => {
@@ -1403,7 +1413,34 @@ function App() {
           }}
         />
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-          {selectedTrack ? (
+          {showNodeGraph ? (
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+              <div className="flex items-center gap-3 px-4 py-2 bg-zinc-900 border-b border-zinc-800">
+                <button
+                  onClick={() => setShowNodeGraph(false)}
+                  className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-zinc-800 hover:bg-zinc-700 text-white"
+                >
+                  ← Back
+                </button>
+                <span className="text-sm text-zinc-400">Effects Mixing</span>
+              </div>
+              <NodeGraph
+                nodes={nodeGraphState.nodes}
+                connections={nodeGraphState.connections}
+                selectedNodeId={nodeGraphState.selectedNodeId}
+                onSelectNode={nodeGraphState.setSelectedNodeId}
+                onDeleteNode={nodeGraphState.removeNode}
+                onUpdateNodePosition={nodeGraphState.updateNodePosition}
+                onUpdateNodeParams={nodeGraphState.updateNodeParams}
+                onAddEffect={nodeGraphState.addEffectNode}
+                onRemoveConnection={nodeGraphState.removeConnection}
+                onConnectNodes={nodeGraphState.connectNodes}
+                onReplaceEffect={nodeGraphState.replaceEffectNode}
+                AVAILABLE_EFFECTS={nodeGraphState.AVAILABLE_EFFECTS}
+                tracks={tracks}
+              />
+            </div>
+          ) : selectedTrack ? (
             selectedTrack.type === 'beat' ? (
               <SequencerPanel
                 trackId={selectedTrack.id}
@@ -1442,7 +1479,8 @@ function App() {
               />
             )
           ) : (
-        <TrackTimeline
+        <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+          <TrackTimeline
               ref={timelineRef}
               tracks={tracks}
               trackNotes={trackNotes}
@@ -1474,6 +1512,7 @@ function App() {
               setZoom={setZoom}
               autoZoomLocked={autoZoomLocked}
               setAutoZoomLocked={setAutoZoomLocked}
+              onOpenNodeGraph={() => setShowNodeGraph(true)}
               bpm={bpm}
               setBpm={setBpm}
               loopStart={loopStart}
@@ -1489,6 +1528,7 @@ function App() {
               }}
               isRestoring={isRestoring}
             />
+          </div>
           )}
         </div>
       </div>

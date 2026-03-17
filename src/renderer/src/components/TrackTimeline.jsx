@@ -124,7 +124,7 @@ function getNoteOwnerRegionId(noteStart, regions = []) {
 
 const sharedAudioClipCache = {}
 
-const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone }, ref) {
+const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, setTrackNotes, trackBeats, setTrackBeats, trackInstruments, trackVolumes, setTrackVolumes, trackOffsets, setTrackOffsets, trackLengths, setTrackLengths, trackRegions, setTrackRegions, trackVSTMode, trackVSTLoading, trackMuted, setTrackMuted, trackSoloed, setTrackSoloed, trackAutomation, onSelectTrack, gridWidth, setGridWidth, zoom, setZoom, autoZoomLocked, setAutoZoomLocked, bpm, setBpm, loopStart, setLoopStart, loopEnd, setLoopEnd, onLoadingChange, isRestoring, isImportingAudio, onAudioDecodeDone, onOpenNodeGraph }, ref) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [currentBeat, setCurrentBeat] = useState(0)
@@ -3041,6 +3041,15 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
           </button>
 
           <h2 className="text-white font-semibold text-base select-none">Arrangement</h2>
+
+          <button
+            onClick={onOpenNodeGraph}
+            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-sm font-semibold text-amber-200 border border-amber-500/40 transition"
+            title="Open effects node editor"
+            aria-label="Open effects node editor"
+          >
+            FX
+          </button>
         </div>
 
         {/* Loop controls */}

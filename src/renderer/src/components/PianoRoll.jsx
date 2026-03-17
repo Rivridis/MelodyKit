@@ -1979,17 +1979,15 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
   return (
     <div className="fixed inset-0 flex flex-col bg-zinc-900">
 
-      <div className="flex items-center gap-4 px-4 py-3 bg-gradient-to-b from-zinc-800 to-zinc-900 border-b border-zinc-700 shadow-lg">
+      <div className="flex items-center justify-between px-4 py-3 bg-zinc-900 border-b border-zinc-700 shadow-lg">
         <div className="flex items-center gap-3">
           {onBack && (
             <button
               onClick={onBack}
-              className="h-9 px-3 flex items-center justify-center bg-zinc-700/50 hover:bg-zinc-600 text-white rounded-lg transition-all hover:scale-105 active:scale-95"
+              className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-zinc-800 hover:bg-zinc-700 text-white"
               title="Back to tracks"
             >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
-                <path d="M15 6l-6 6 6 6V6z"></path>
-              </svg>
+              ← Back
             </button>
           )}
           <div className="flex items-center gap-2.5 px-3 h-9 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
@@ -2044,9 +2042,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
               </svg>
             )}
           </button>
-        </div>
-
-        <div className="flex flex-1 items-center justify-center gap-2">
+          <div className="w-px h-6 bg-zinc-700/60 mx-1" />
           <button
             onClick={() => {
               setSelectionMode(s => {
@@ -2060,14 +2056,6 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
             title="Toggle selection mode"
           >
             {selectionMode ? 'Selecting...' : 'Select'}
-          </button>
-          <button
-            onClick={handleImportMidi}
-            disabled={mode !== 'edit'}
-            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-amber-800/30 text-zinc-500 border-amber-700/25 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70 shadow-sm'}`}
-            title="Import MIDI file into this piano roll"
-          >
-            Import MIDI
           </button>
           <button
             onClick={() => commitNotesChange([])}
@@ -2085,6 +2073,17 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
           >
             Undo
           </button>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleImportMidi}
+            disabled={mode !== 'edit'}
+            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-amber-800/30 text-zinc-500 border-amber-700/25 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70 shadow-sm'}`}
+            title="Import MIDI file into this piano roll"
+          >
+            Import MIDI
+          </button>
           <button
             onClick={cycleGridDivision}
             disabled={mode !== 'edit'}
@@ -2093,9 +2092,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
           >
             Grid: 1/{gridDivision}
           </button>
-        </div>
-
-        <div className="flex items-center gap-2 px-3 h-9 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
+          <div className="flex items-center gap-2 px-3 h-9 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
           <label className="text-zinc-400 text-xs font-medium tracking-wide">BPM</label>
           <input
             type="number"
@@ -2118,6 +2115,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
             min="40"
             max="300"
           />
+          </div>
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-auto bg-zinc-900 relative">
