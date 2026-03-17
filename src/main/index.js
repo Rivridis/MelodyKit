@@ -502,6 +502,174 @@ app.whenReady().then(() => {
     return sendToBackend(`SET_STATE ${trackId} ${state}`)
   })
 
+  // Effect management - Track effects
+  ipcMain.handle('backend:add-effect', async (event, { trackId, effectType }) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      if (!effectType || typeof effectType !== 'string') {
+        return { ok: false, error: 'invalid-effect-type' }
+      }
+      return sendToBackend(`ADD_EFFECT ${trackId} ${effectType}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:remove-effect', async (event, { trackId, effectId }) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      return sendToBackend(`REMOVE_EFFECT ${trackId} ${effectId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:set-effect-parameter', async (event, { trackId, effectId, paramIndex, value }) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      if (paramIndex === undefined || isNaN(paramIndex)) {
+        return { ok: false, error: 'invalid-param-index' }
+      }
+      if (value === undefined || isNaN(value)) {
+        return { ok: false, error: 'invalid-param-value' }
+      }
+      const v = Math.max(0, Math.min(1, Number(value))) // Clamp to 0.0-1.0
+      return sendToBackend(`SET_EFFECT_PARAM ${trackId} ${effectId} ${paramIndex} ${v}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:get-effect-parameter', async (event, { trackId, effectId, paramIndex }) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      if (paramIndex === undefined || isNaN(paramIndex)) {
+        return { ok: false, error: 'invalid-param-index' }
+      }
+      return sendToBackend(`GET_EFFECT_PARAM ${trackId} ${effectId} ${paramIndex}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:get-track-effects', async (event, trackId) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      return sendToBackend(`LIST_TRACK_EFFECTS ${trackId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:set-effect-bypassed', async (event, { trackId, effectId, bypassed }) => {
+    try {
+      if (!trackId || typeof trackId !== 'string') {
+        return { ok: false, error: 'invalid-track-id' }
+      }
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      const bypassState = bypassed ? 'on' : 'off'
+      return sendToBackend(`BYPASS_EFFECT ${trackId} ${effectId} ${bypassState}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  // Effect management - Master track effects
+  ipcMain.handle('backend:add-master-effect', async (event, { effectType }) => {
+    try {
+      if (!effectType || typeof effectType !== 'string') {
+        return { ok: false, error: 'invalid-effect-type' }
+      }
+      return sendToBackend(`ADD_MASTER_EFFECT ${effectType}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:remove-master-effect', async (event, { effectId }) => {
+    try {
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      return sendToBackend(`REMOVE_MASTER_EFFECT ${effectId}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:set-master-effect-parameter', async (event, { effectId, paramIndex, value }) => {
+    try {
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      if (paramIndex === undefined || isNaN(paramIndex)) {
+        return { ok: false, error: 'invalid-param-index' }
+      }
+      if (value === undefined || isNaN(value)) {
+        return { ok: false, error: 'invalid-param-value' }
+      }
+      const v = Math.max(0, Math.min(1, Number(value))) // Clamp to 0.0-1.0
+      return sendToBackend(`SET_MASTER_EFFECT_PARAM ${effectId} ${paramIndex} ${v}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:get-master-effect-parameter', async (event, { effectId, paramIndex }) => {
+    try {
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      if (paramIndex === undefined || isNaN(paramIndex)) {
+        return { ok: false, error: 'invalid-param-index' }
+      }
+      return sendToBackend(`GET_MASTER_EFFECT_PARAM ${effectId} ${paramIndex}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:get-master-effects', async (event) => {
+    try {
+      return sendToBackend('LIST_MASTER_EFFECTS')
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backend:set-master-effect-bypassed', async (event, { effectId, bypassed }) => {
+    try {
+      if (!effectId || typeof effectId !== 'string') {
+        return { ok: false, error: 'invalid-effect-id' }
+      }
+      const bypassState = bypassed ? 'on' : 'off'
+      return sendToBackend(`BYPASS_MASTER_EFFECT ${effectId} ${bypassState}`)
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('backend:render', async (event, { durationMs = 1000 }) => {
     try {
       const tempName = `melodykit_render_${Date.now()}.wav`

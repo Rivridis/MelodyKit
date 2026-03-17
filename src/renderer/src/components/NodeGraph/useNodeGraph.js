@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 
 const AVAILABLE_EFFECTS = [
   { id: 'reverb', name: 'Reverb', params: { wet: 0.3, decay: 2 } },
@@ -6,9 +6,6 @@ const AVAILABLE_EFFECTS = [
   { id: 'chorus', name: 'Chorus', params: { rate: 1.5, depth: 0.5, wet: 0.3 } },
   { id: 'distortion', name: 'Distortion', params: { drive: 0.5, tone: 0.5 } },
   { id: 'compressor', name: 'Compressor', params: { threshold: -20, ratio: 4, attack: 0.005, release: 0.1 } },
-  { id: 'equalizerLow', name: 'EQ (Low)', params: { frequency: 100, gain: 0 } },
-  { id: 'equalizerMid', name: 'EQ (Mid)', params: { frequency: 1000, gain: 0 } },
-  { id: 'equalizerHigh', name: 'EQ (High)', params: { frequency: 10000, gain: 0 } },
   { id: 'phaser', name: 'Phaser', params: { rate: 0.5, depth: 0.5 } },
   { id: 'flanger', name: 'Flanger', params: { rate: 0.5, depth: 0.5 } },
 ]
@@ -28,6 +25,115 @@ export const useNodeGraph = (tracks) => {
   const [connections, setConnections] = useState([])
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [selectedConnection, setSelectedConnection] = useState(null)
+  const pendingAddsRef = useRef([])
+
+  useEffect(() => {
+    if (!window?.api?.backend?.onEvent) return
+
+    const unsubscribe = window.api.backend.onEvent((line) => {
+      if (typeof line !== 'string' || !line.startsWith('EVENT ')) return
+
+      if (line.startsWith('EVENT EFFECT_ADDED ')) {
+        const parts = line.split(' ')
+        if (parts.length < 5) return
+        const trackId = parts[2]
+        const effectId = parts[3]
+        const effectType = parts[4]
+
+        const idx = pendingAddsRef.current.findIndex(
+          (p) => p.scope === 'track' && p.trackId === trackId && p.effectType === effectType
+        )
+        if (idx >= 0) {
+          const pending = pendingAddsRef.current[idx]
+          pendingAddsRef.current.splice(idx, 1)
+          setNodes((prev) =>
+            prev.map((n) =>
+              n.id === pending.nodeId
+                ? { ...n, backendEffectId: effectId, backendScope: 'track', backendTrackId: trackId }
+                : n
+            )
+          )
+        }
+      }
+
+      if (line.startsWith('EVENT MASTER_EFFECT_ADDED ')) {
+        const parts = line.split(' ')
+        if (parts.length < 4) return
+        const effectId = parts[2]
+        const effectType = parts[3]
+
+        const idx = pendingAddsRef.current.findIndex(
+          (p) => p.scope === 'master' && p.effectType === effectType
+        )
+        if (idx >= 0) {
+          const pending = pendingAddsRef.current[idx]
+          pendingAddsRef.current.splice(idx, 1)
+          setNodes((prev) =>
+            prev.map((n) => (n.id === pending.nodeId ? { ...n, backendEffectId: effectId, backendScope: 'master' } : n))
+          )
+        }
+      }
+    })
+
+    return () => {
+      if (unsubscribe) unsubscribe()
+    }
+  }, [])
+
+  const resolveEffectTarget = useCallback(
+    (sourceNodeId, sourceNodes = nodes, sourceConnections = connections) => {
+      let currentId = sourceNodeId
+      const visited = new Set()
+
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId)
+        const node = sourceNodes.find((n) => n.id === currentId)
+        if (!node) break
+
+        if (node.type === 'master') return { scope: 'master' }
+        if (node.type === 'track') return { scope: 'track', trackId: String(node.trackId ?? String(node.id).replace(/^track-/, '')) }
+
+        const parentConn = sourceConnections.find((c) => c.target === currentId)
+        currentId = parentConn ? parentConn.source : null
+      }
+
+      return null
+    },
+    [nodes, connections]
+  )
+
+  const getParamIndex = useCallback((effectType, paramKey) => {
+    const map = {
+      reverb: { wet: 2, decay: 0 },
+      delay: { time: 0, feedback: 1, wet: 2 },
+      chorus: { rate: 0, depth: 1, wet: 2 },
+      distortion: { drive: 0, tone: 1 },
+      compressor: { threshold: 0, ratio: 1, attack: 2, release: 3 },
+      phaser: { rate: 0, depth: 1 },
+      flanger: { rate: 0, depth: 1, wet: 2 },
+    }
+    return map[effectType]?.[paramKey]
+  }, [])
+
+  const normalizeParamValue = useCallback((effectType, paramKey, value) => {
+    const ranges = {
+      reverb: { wet: [0, 1], decay: [0.1, 5] },
+      delay: { time: [0.01, 2], feedback: [0, 0.99], wet: [0, 1] },
+      chorus: { rate: [0.1, 10], depth: [0, 1], wet: [0, 1] },
+      distortion: { drive: [0, 1], tone: [0, 1] },
+      compressor: { threshold: [-60, 0], ratio: [1, 20], attack: [0.001, 0.5], release: [0.01, 3] },
+      phaser: { rate: [0.1, 10], depth: [0, 1] },
+      flanger: { rate: [0.1, 5], depth: [0, 1], wet: [0, 1] },
+    }
+
+    const range = ranges[effectType]?.[paramKey]
+    if (!range) return Math.max(0, Math.min(1, Number(value) || 0))
+
+    const [min, max] = range
+    const v = Number(value)
+    if (!Number.isFinite(v) || max <= min) return 0
+    return Math.max(0, Math.min(1, (v - min) / (max - min)))
+  }, [])
 
   // Initialize track nodes when tracks change
   const initializeTrackNodes = useCallback(() => {
@@ -54,6 +160,12 @@ export const useNodeGraph = (tracks) => {
     const effect = AVAILABLE_EFFECTS.find((e) => e.id === effectType)
     if (!effect) return
 
+    const target = resolveEffectTarget(sourceNodeId)
+    if (!target) {
+      console.warn('[NodeGraph] Could not resolve backend target for source node:', sourceNodeId)
+      return
+    }
+
     const newNodeId = `effect-${Date.now()}`
     const sourceNode = nodes.find((n) => n.id === sourceNodeId)
     
@@ -70,9 +182,29 @@ export const useNodeGraph = (tracks) => {
       label: effect.name,
       params: { ...effect.params },
       isLocked: false,
+      backendEffectId: null,
+      backendScope: target.scope,
+      backendTrackId: target.trackId,
     }
 
     setNodes((prev) => [...prev, newNode])
+
+    pendingAddsRef.current.push({
+      nodeId: newNodeId,
+      effectType,
+      scope: target.scope,
+      trackId: target.trackId,
+    })
+
+    if (target.scope === 'master') {
+      window.api.backend.addMasterEffect(effectType).catch((e) => {
+        console.error('[NodeGraph] addMasterEffect failed:', e)
+      })
+    } else {
+      window.api.backend.addEffect(target.trackId, effectType).catch((e) => {
+        console.error('[NodeGraph] addEffect failed:', e)
+      })
+    }
 
     // Find existing connection that points to target (if any)
     const existingConnToTarget = connections.find((c) => c.source === sourceNodeId)
@@ -104,11 +236,23 @@ export const useNodeGraph = (tracks) => {
     }
 
     return newNodeId
-  }, [nodes, connections])
+  }, [nodes, connections, resolveEffectTarget])
 
   const removeNode = useCallback((nodeId) => {
     const node = nodes.find((n) => n.id === nodeId)
     if (node?.isLocked) return
+
+    if (node?.type === 'effect' && node.backendEffectId) {
+      if (node.backendScope === 'master') {
+        window.api.backend.removeMasterEffect(node.backendEffectId).catch((e) => {
+          console.error('[NodeGraph] removeMasterEffect failed:', e)
+        })
+      } else if (node.backendTrackId) {
+        window.api.backend.removeEffect(node.backendTrackId, node.backendEffectId).catch((e) => {
+          console.error('[NodeGraph] removeEffect failed:', e)
+        })
+      }
+    }
 
     // Get all connections involving this node
     const relatedConnections = connections.filter(
@@ -150,10 +294,34 @@ export const useNodeGraph = (tracks) => {
   }, [])
 
   const updateNodeParams = useCallback((nodeId, params) => {
+    const node = nodes.find((n) => n.id === nodeId)
+
+    if (node?.type === 'effect' && node.backendEffectId) {
+      const prevParams = node.params || {}
+      Object.entries(params).forEach(([key, value]) => {
+        if (prevParams[key] === value) return
+
+        const paramIndex = getParamIndex(node.effectType, key)
+        if (paramIndex === undefined) return
+
+        const normalized = normalizeParamValue(node.effectType, key, value)
+
+        if (node.backendScope === 'master') {
+          window.api.backend
+            .setMasterEffectParameter(node.backendEffectId, paramIndex, normalized)
+            .catch((e) => console.error('[NodeGraph] setMasterEffectParameter failed:', e))
+        } else if (node.backendTrackId) {
+          window.api.backend
+            .setEffectParameter(node.backendTrackId, node.backendEffectId, paramIndex, normalized)
+            .catch((e) => console.error('[NodeGraph] setEffectParameter failed:', e))
+        }
+      })
+    }
+
     setNodes((prev) =>
       prev.map((n) => (n.id === nodeId ? { ...n, params } : n))
     )
-  }, [])
+  }, [nodes, getParamIndex, normalizeParamValue])
 
   const connectNodes = useCallback((sourceId, targetId) => {
     if (sourceId === targetId) return
@@ -218,6 +386,36 @@ export const useNodeGraph = (tracks) => {
     const effect = AVAILABLE_EFFECTS.find((e) => e.id === newEffectType)
     if (!effect) return
 
+    const existing = nodes.find((n) => n.id === nodeId)
+    if (existing?.type === 'effect' && existing.backendEffectId) {
+      if (existing.backendScope === 'master') {
+        window.api.backend.removeMasterEffect(existing.backendEffectId).catch((e) => {
+          console.error('[NodeGraph] removeMasterEffect for replace failed:', e)
+        })
+      } else if (existing.backendTrackId) {
+        window.api.backend.removeEffect(existing.backendTrackId, existing.backendEffectId).catch((e) => {
+          console.error('[NodeGraph] removeEffect for replace failed:', e)
+        })
+      }
+
+      pendingAddsRef.current.push({
+        nodeId,
+        effectType: newEffectType,
+        scope: existing.backendScope || 'track',
+        trackId: existing.backendTrackId,
+      })
+
+      if (existing.backendScope === 'master') {
+        window.api.backend.addMasterEffect(newEffectType).catch((e) => {
+          console.error('[NodeGraph] addMasterEffect for replace failed:', e)
+        })
+      } else if (existing.backendTrackId) {
+        window.api.backend.addEffect(existing.backendTrackId, newEffectType).catch((e) => {
+          console.error('[NodeGraph] addEffect for replace failed:', e)
+        })
+      }
+    }
+
     setNodes((prev) =>
       prev.map((n) =>
         n.id === nodeId && n.type === 'effect'
@@ -226,11 +424,12 @@ export const useNodeGraph = (tracks) => {
               effectType: newEffectType,
               label: effect.name,
               params: { ...effect.params },
+              backendEffectId: null,
             }
           : n
       )
     )
-  }, [])
+  }, [nodes])
 
   return {
     nodes,

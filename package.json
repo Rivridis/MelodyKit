@@ -40,6 +40,7 @@
     "@electron-toolkit/eslint-config": "^2.1.0",
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@vitejs/plugin-react": "^5.0.3",
+    "baseline-browser-mapping": "^2.10.8",
     "electron": "^38.1.2",
     "electron-builder": "^25.1.8",
     "electron-vite": "^4.0.1",

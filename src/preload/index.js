@@ -72,6 +72,20 @@ api.backend = {
   getVSTState: (trackId) => ipcRenderer.invoke('backend:get-vst-state', trackId),
   // Set VST plugin preset state (from base64-encoded binary data)
   setVSTState: (trackId, state) => ipcRenderer.invoke('backend:set-vst-state', { trackId, state }),
+  // Effect chain management
+  addEffect: (trackId, effectType) => ipcRenderer.invoke('backend:add-effect', { trackId, effectType }),
+  removeEffect: (trackId, effectId) => ipcRenderer.invoke('backend:remove-effect', { trackId, effectId }),
+  setEffectParameter: (trackId, effectId, paramIndex, value) => ipcRenderer.invoke('backend:set-effect-parameter', { trackId, effectId, paramIndex, value }),
+  getEffectParameter: (trackId, effectId, paramIndex) => ipcRenderer.invoke('backend:get-effect-parameter', { trackId, effectId, paramIndex }),
+  getTrackEffects: (trackId) => ipcRenderer.invoke('backend:get-track-effects', trackId),
+  setEffectBypassed: (trackId, effectId, bypassed) => ipcRenderer.invoke('backend:set-effect-bypassed', { trackId, effectId, bypassed }),
+  // Master track effect management
+  addMasterEffect: (effectType) => ipcRenderer.invoke('backend:add-master-effect', effectType),
+  removeMasterEffect: (effectId) => ipcRenderer.invoke('backend:remove-master-effect', effectId),
+  setMasterEffectParameter: (effectId, paramIndex, value) => ipcRenderer.invoke('backend:set-master-effect-parameter', { effectId, paramIndex, value }),
+  getMasterEffectParameter: (effectId, paramIndex) => ipcRenderer.invoke('backend:get-master-effect-parameter', { effectId, paramIndex }),
+  getMasterEffects: () => ipcRenderer.invoke('backend:get-master-effects'),
+  setMasterEffectBypassed: (effectId, bypassed) => ipcRenderer.invoke('backend:set-master-effect-bypassed', { effectId, bypassed }),
   // listen to backend events coming from stdout lines
   onEvent: (cb) => {
     const listener = (ev, payload) => cb(payload)

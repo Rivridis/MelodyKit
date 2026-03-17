@@ -15,6 +15,8 @@ juce_add_console_app(Backend
 target_sources(Backend PRIVATE
     src/Main.cpp
     src/BackendHost.cpp
+    src/BackendHostEffects.cpp
+    src/DspEffects.cpp
 )
 
 target_compile_definitions(Backend
@@ -32,6 +34,7 @@ target_link_libraries(Backend
         juce::juce_audio_devices
         juce::juce_audio_formats
         juce::juce_audio_processors
+    juce::juce_dsp
         juce::juce_gui_basics
         juce::juce_audio_utils
 )

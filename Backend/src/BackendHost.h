@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include "DspEffects.h"
 #include <atomic>
 #include <map>
 #include <memory>
@@ -105,6 +106,66 @@ public:
     // Returns true on success, false if no plugin loaded or data invalid
     bool setPluginState(const juce::String& trackId, const juce::String& base64State);
 
+    // Effect chain management
+    // Adds an effect to the track's effect chain
+    // Returns the effect ID if successful, empty string on failure
+    juce::String addEffect(const juce::String& trackId, 
+                          const juce::String& effectType,
+                          juce::String& errorMessage);
+    
+    // Removes an effect from the track's effect chain
+    bool removeEffect(const juce::String& trackId,
+                     const juce::String& effectId,
+                     juce::String& errorMessage);
+    
+    // Updates an effect parameter value
+    bool setEffectParameter(const juce::String& trackId,
+                           const juce::String& effectId,
+                           int parameterIndex,
+                           float value,
+                           juce::String& errorMessage);
+    
+    // Get effect parameter value (0.0 - 1.0)
+    float getEffectParameter(const juce::String& trackId,
+                            const juce::String& effectId,
+                            int parameterIndex) const;
+    
+    // Get effect parameter info (name and current value)
+    bool getEffectParameterInfo(const juce::String& trackId,
+                               const juce::String& effectId,
+                               int parameterIndex,
+                               juce::String& paramName,
+                               float& paramValue) const;
+    
+    // Get list of effect IDs for a track in order
+    juce::StringArray getTrackEffects(const juce::String& trackId) const;
+    
+    // Bypass/unbypass effect
+    bool setEffectBypassed(const juce::String& trackId,
+                          const juce::String& effectId,
+                          bool bypassed,
+                          juce::String& errorMessage);
+
+    // Master track effect chain management
+    juce::String addMasterEffect(const juce::String& effectType,
+                                juce::String& errorMessage);
+    bool removeMasterEffect(const juce::String& effectId,
+                           juce::String& errorMessage);
+    bool setMasterEffectParameter(const juce::String& effectId,
+                                 int parameterIndex,
+                                 float value,
+                                 juce::String& errorMessage);
+    float getMasterEffectParameter(const juce::String& effectId,
+                                  int parameterIndex) const;
+    juce::StringArray getMasterEffects() const;
+    bool setMasterEffectBypassed(const juce::String& effectId,
+                                bool bypassed,
+                                juce::String& errorMessage);
+
+    // Internal effect processing (called from audio callbacks)
+    void processTrackEffectChain(const juce::String& trackId, juce::AudioBuffer<float>& buffer);
+    void processMasterEffectChain(juce::AudioBuffer<float>& buffer);
+
     // Beat sampler controls
     bool loadBeatSample(const juce::String& trackId,
                         const juce::String& rowId,
@@ -171,6 +232,11 @@ private:
     juce::AudioFormatManager beatFormatManager;
     
     // Per-track plugin state
+    struct EffectChainEntry {
+        juce::String effectId;
+        std::unique_ptr<DspEffect> effect;
+    };
+    
     struct TrackState {
         std::unique_ptr<juce::AudioPluginInstance> plugin;
         std::unique_ptr<juce::AudioProcessorPlayer> player;
@@ -185,6 +251,14 @@ private:
         int sf2CurrentBank = 0;
         int sf2CurrentPreset = 0;
         
+        // Effect chain (processed in order)
+        struct EffectEntry {
+            juce::String id;
+            std::unique_ptr<DspEffect> effect;
+            bool bypassed = false;
+        };
+        std::vector<EffectEntry> effectChain;
+        
         // Track active timers for scheduled note-offs
         struct NoteOffTimer {
             std::unique_ptr<juce::Timer> timer;
@@ -195,10 +269,23 @@ private:
     std::map<juce::String, TrackState> tracks;
     mutable juce::CriticalSection tracksLock;
 
+    // Master track effect chain
+    struct MasterTrackState {
+        struct EffectEntry {
+            juce::String id;
+            std::unique_ptr<DspEffect> effect;
+            bool bypassed = false;
+        };
+        std::vector<EffectEntry> effectChain;
+    } masterTrack;
+    mutable juce::CriticalSection masterLock;
+
     std::map<juce::String, std::map<juce::String, std::shared_ptr<BeatSample>>> beatSamples; // trackId -> rowId -> sample
     std::map<juce::String, std::vector<BeatVoice>> beatVoices; // trackId -> active voices
     mutable juce::CriticalSection beatLock;
     std::unique_ptr<BeatAudioCallback> beatCallback;
+
+    std::unique_ptr<juce::AudioIODeviceCallback> masterEffectCallback;
 
     std::map<juce::String, std::shared_ptr<BeatSample>> samplerSamples; // trackId -> loaded sample
     std::map<juce::String, std::vector<SamplerVoice>> samplerVoices; // trackId -> active voices

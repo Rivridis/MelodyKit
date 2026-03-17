@@ -11,8 +11,8 @@
 // SF2 audio callback for TinySoundFont rendering
 class SF2AudioCallback : public juce::AudioIODeviceCallback {
 public:
-    SF2AudioCallback(tsf* soundFont, float* gainPtr, double sampleRate)
-        : sf(soundFont), gainLinearPtr(gainPtr), bufferSampleRate(sampleRate) {
+    SF2AudioCallback(tsf* soundFont, float* gainPtr, double sampleRate, BackendHost* host, const juce::String& trackId)
+        : sf(soundFont), gainLinearPtr(gainPtr), bufferSampleRate(sampleRate), backendHost(host), trackId(trackId) {
         if (sf) {
             tsf_set_output(sf, TSF_STEREO_INTERLEAVED, (int)sampleRate, 0.0f);
             tsf_set_max_voices(sf, 256); // Pre-allocate voices for thread safety
@@ -60,6 +60,12 @@ public:
                 juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
             }
         }
+        
+        // Apply track effect chain
+        if (backendHost && numOutputChannels > 0) {
+            juce::AudioBuffer<float> trackBuffer(outputChannelData, numOutputChannels, numSamples);
+            backendHost->processTrackEffectChain(trackId, trackBuffer);
+        }
     }
     
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
@@ -84,6 +90,8 @@ private:
     tsf* sf;
     float* gainLinearPtr;
     double bufferSampleRate;
+    BackendHost* backendHost;
+    juce::String trackId;
     std::vector<float> tempBuffer;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SF2AudioCallback)
 };
@@ -91,8 +99,8 @@ private:
 // Custom audio callback that wraps AudioProcessorPlayer and applies gain
 class GainAudioCallback : public juce::AudioIODeviceCallback {
 public:
-    GainAudioCallback(juce::AudioProcessorPlayer* player, float* gainPtr)
-        : player(player), gainLinearPtr(gainPtr) {}
+    GainAudioCallback(juce::AudioProcessorPlayer* player, float* gainPtr, BackendHost* host, const juce::String& trackId)
+        : player(player), gainLinearPtr(gainPtr), backendHost(host), trackId(trackId) {}
     
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
                                           int numInputChannels,
@@ -104,6 +112,12 @@ public:
         player->audioDeviceIOCallbackWithContext(inputChannelData, numInputChannels,
                                                   outputChannelData, numOutputChannels,
                                                   numSamples, context);
+        
+        // Apply track effect chain
+        if (backendHost && numOutputChannels > 0) {
+            juce::AudioBuffer<float> trackBuffer(outputChannelData, numOutputChannels, numSamples);
+            backendHost->processTrackEffectChain(trackId, trackBuffer);
+        }
         
         // Apply gain to output
         const float gain = *gainLinearPtr;
@@ -127,6 +141,8 @@ public:
 private:
     juce::AudioProcessorPlayer* player;
     float* gainLinearPtr;
+    BackendHost* backendHost;
+    juce::String trackId;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GainAudioCallback)
 };
 
@@ -307,6 +323,32 @@ private:
     double currentRate = 44100.0;
 };
 
+// Master effect processing callback - applied after all track/beat/sampler audio has been mixed
+class MasterEffectAudioCallback : public juce::AudioIODeviceCallback {
+public:
+    MasterEffectAudioCallback(BackendHost* host)
+        : backendHost(host) {}
+    
+    void audioDeviceIOCallbackWithContext(const float* const* /*inputChannelData*/,
+                                          int /*numInputChannels*/,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& /*context*/) override {
+        if (backendHost && numOutputChannels > 0 && numSamples > 0) {
+            juce::AudioBuffer<float> masterBuffer(outputChannelData, numOutputChannels, numSamples);
+            backendHost->processMasterEffectChain(masterBuffer);
+        }
+    }
+    
+    void audioDeviceAboutToStart(juce::AudioIODevice* /*device*/) override {}
+    void audioDeviceStopped() override {}
+    
+private:
+    BackendHost* backendHost;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MasterEffectAudioCallback)
+};
+
 // Simple window to host the plugin's editor
 class PluginEditorWindow : public juce::DocumentWindow {
 public:
@@ -362,9 +404,17 @@ BackendHost::BackendHost() {
     // Shared sampler callback (handles all sampler tracks)
     samplerCallback = std::make_unique<SamplerAudioCallback>(samplerSamples, samplerVoices, samplerLock);
     deviceManager.addAudioCallback(samplerCallback.get());
+
+    // Master effect processing callback (applied after all tracks are mixed)
+    masterEffectCallback = std::make_unique<MasterEffectAudioCallback>(this);
+    deviceManager.addAudioCallback(masterEffectCallback.get());
 }
 
 BackendHost::~BackendHost() {
+    if (masterEffectCallback) {
+        deviceManager.removeAudioCallback(masterEffectCallback.get());
+        masterEffectCallback.reset();
+    }
     if (samplerCallback) {
         deviceManager.removeAudioCallback(samplerCallback.get());
         samplerCallback.reset();
@@ -495,8 +545,8 @@ bool BackendHost::loadPlugin(const juce::String& trackId, const juce::File& file
     track.player->getMidiMessageCollector().reset(sr);
     track.gainLinear = 1.0f; // Default unity gain
     
-    // Create gain wrapper callback
-    track.gainCallback = std::make_unique<GainAudioCallback>(track.player.get(), &track.gainLinear);
+    // Create gain wrapper callback with effect chain support and master effect support
+    track.gainCallback = std::make_unique<GainAudioCallback>(track.player.get(), &track.gainLinear, this, trackId);
     
     // Add the gain callback as an audio callback (not the player directly)
     deviceManager.addAudioCallback(track.gainCallback.get());
@@ -949,7 +999,7 @@ bool BackendHost::loadSF2(const juce::String& trackId, const juce::File& file, j
     
     // Configure TinySoundFont
     const double sr = getSampleRate();
-    track.sf2Callback = std::make_unique<SF2AudioCallback>(sf, &track.gainLinear, sr);
+    track.sf2Callback = std::make_unique<SF2AudioCallback>(sf, &track.gainLinear, sr, this, trackId);
     
     // Find and set the first available preset
     int presetIndex = tsf_get_presetindex(sf, 0, 0);

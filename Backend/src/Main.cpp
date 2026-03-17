@@ -469,6 +469,241 @@ bool handleCommand(const juce::String& rawLine, CommandContext& ctx) {
         return true;
     }
 
+    // Effect chain management commands
+    if (command == "ADD_EFFECT") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR ADD_EFFECT missing-arguments (trackId effectType)");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String effectType = tokens[1];
+        
+        juce::String err;
+        juce::String effectId = ctx.host.addEffect(trackId, effectType, err);
+        if (effectId.isEmpty()) {
+            emit("ERROR ADD_EFFECT " + trackId + " " + err);
+        } else {
+            emit("EVENT EFFECT_ADDED " + trackId + " " + effectId + " " + effectType);
+        }
+        return true;
+    }
+    
+    if (command == "REMOVE_EFFECT") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR REMOVE_EFFECT missing-arguments (trackId effectId)");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String effectId = tokens[1];
+        
+        juce::String err;
+        if (!ctx.host.removeEffect(trackId, effectId, err)) {
+            emit("ERROR REMOVE_EFFECT " + trackId + " " + err);
+        } else {
+            emit("EVENT EFFECT_REMOVED " + trackId + " " + effectId);
+        }
+        return true;
+    }
+    
+    if (command == "SET_EFFECT_PARAM") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 4) {
+            emit("ERROR SET_EFFECT_PARAM missing-arguments (trackId effectId paramIndex value)");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String effectId = tokens[1];
+        const int paramIndex = tokens[2].getIntValue();
+        const float value = tokens[3].getFloatValue();
+        
+        juce::String err;
+        if (!ctx.host.setEffectParameter(trackId, effectId, paramIndex, value, err)) {
+            emit("ERROR SET_EFFECT_PARAM " + trackId + " " + effectId + " " + err);
+        } else {
+            emit("EVENT EFFECT_PARAM_SET " + trackId + " " + effectId + " " + juce::String(paramIndex) + " " + juce::String(value, 4));
+        }
+        return true;
+    }
+    
+    if (command == "GET_EFFECT_PARAM") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 3) {
+            emit("ERROR GET_EFFECT_PARAM missing-arguments (trackId effectId paramIndex)");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String effectId = tokens[1];
+        const int paramIndex = tokens[2].getIntValue();
+        
+        float value = ctx.host.getEffectParameter(trackId, effectId, paramIndex);
+        emit("EVENT EFFECT_PARAM " + trackId + " " + effectId + " " + juce::String(paramIndex) + " " + juce::String(value, 4));
+        return true;
+    }
+    
+    if (command == "LIST_TRACK_EFFECTS") {
+        const juce::String trackId = args.trim();
+        if (trackId.isEmpty()) {
+            emit("ERROR LIST_TRACK_EFFECTS missing-track-id");
+            return true;
+        }
+        
+        juce::StringArray effects = ctx.host.getTrackEffects(trackId);
+        juce::String result = "EVENT TRACK_EFFECTS " + trackId;
+        for (const auto& effectId : effects) {
+            result += " " + effectId;
+        }
+        emit(result);
+        return true;
+    }
+    
+    if (command == "BYPASS_EFFECT") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 3) {
+            emit("ERROR BYPASS_EFFECT missing-arguments (trackId effectId on|off)");
+            return true;
+        }
+        
+        const juce::String trackId = tokens[0];
+        const juce::String effectId = tokens[1];
+        const bool bypassed = tokens[2].toLowerCase() == "on" || tokens[2].toLowerCase() == "true";
+        
+        juce::String err;
+        if (!ctx.host.setEffectBypassed(trackId, effectId, bypassed, err)) {
+            emit("ERROR BYPASS_EFFECT " + trackId + " " + effectId + " " + err);
+        } else {
+            emit("EVENT EFFECT_BYPASSED " + trackId + " " + effectId + " " + (bypassed ? "on" : "off"));
+        }
+        return true;
+    }
+    
+    // Master track effect management
+    if (command == "ADD_MASTER_EFFECT") {
+        const juce::String effectType = args.trim();
+        if (effectType.isEmpty()) {
+            emit("ERROR ADD_MASTER_EFFECT missing-effect-type");
+            return true;
+        }
+        
+        juce::String err;
+        juce::String effectId = ctx.host.addMasterEffect(effectType, err);
+        if (effectId.isEmpty()) {
+            emit("ERROR ADD_MASTER_EFFECT " + err);
+        } else {
+            emit("EVENT MASTER_EFFECT_ADDED " + effectId + " " + effectType);
+        }
+        return true;
+    }
+    
+    if (command == "REMOVE_MASTER_EFFECT") {
+        const juce::String effectId = args.trim();
+        if (effectId.isEmpty()) {
+            emit("ERROR REMOVE_MASTER_EFFECT missing-effect-id");
+            return true;
+        }
+        
+        juce::String err;
+        if (!ctx.host.removeMasterEffect(effectId, err)) {
+            emit("ERROR REMOVE_MASTER_EFFECT " + err);
+        } else {
+            emit("EVENT MASTER_EFFECT_REMOVED " + effectId);
+        }
+        return true;
+    }
+    
+    if (command == "SET_MASTER_EFFECT_PARAM") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 3) {
+            emit("ERROR SET_MASTER_EFFECT_PARAM missing-arguments (effectId paramIndex value)");
+            return true;
+        }
+        
+        const juce::String effectId = tokens[0];
+        const int paramIndex = tokens[1].getIntValue();
+        const float value = tokens[2].getFloatValue();
+        
+        juce::String err;
+        if (!ctx.host.setMasterEffectParameter(effectId, paramIndex, value, err)) {
+            emit("ERROR SET_MASTER_EFFECT_PARAM " + effectId + " " + err);
+        } else {
+            emit("EVENT MASTER_EFFECT_PARAM_SET " + effectId + " " + juce::String(paramIndex) + " " + juce::String(value, 4));
+        }
+        return true;
+    }
+    
+    if (command == "GET_MASTER_EFFECT_PARAM") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR GET_MASTER_EFFECT_PARAM missing-arguments (effectId paramIndex)");
+            return true;
+        }
+        
+        const juce::String effectId = tokens[0];
+        const int paramIndex = tokens[1].getIntValue();
+        
+        float value = ctx.host.getMasterEffectParameter(effectId, paramIndex);
+        emit("EVENT MASTER_EFFECT_PARAM " + effectId + " " + juce::String(paramIndex) + " " + juce::String(value, 4));
+        return true;
+    }
+    
+    if (command == "LIST_MASTER_EFFECTS") {
+        juce::StringArray effects = ctx.host.getMasterEffects();
+        juce::String result = "EVENT MASTER_EFFECTS";
+        for (const auto& effectId : effects) {
+            result += " " + effectId;
+        }
+        emit(result);
+        return true;
+    }
+    
+    if (command == "BYPASS_MASTER_EFFECT") {
+        juce::StringArray tokens;
+        tokens.addTokens(args, " ", "\"'");
+        tokens.removeEmptyStrings();
+        
+        if (tokens.size() < 2) {
+            emit("ERROR BYPASS_MASTER_EFFECT missing-arguments (effectId on|off)");
+            return true;
+        }
+        
+        const juce::String effectId = tokens[0];
+        const bool bypassed = tokens[1].toLowerCase() == "on" || tokens[1].toLowerCase() == "true";
+        
+        juce::String err;
+        if (!ctx.host.setMasterEffectBypassed(effectId, bypassed, err)) {
+            emit("ERROR BYPASS_MASTER_EFFECT " + effectId + " " + err);
+        } else {
+            emit("EVENT MASTER_EFFECT_BYPASSED " + effectId + " " + (bypassed ? "on" : "off"));
+        }
+        return true;
+    }
+
     if (command == "QUIT" || command == "EXIT") {
         ctx.running = false;
         juce::MessageManager::getInstance()->stopDispatchLoop();
