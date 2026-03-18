@@ -358,24 +358,30 @@ export const useNodeGraph = (tracks) => {
 
     // Get nodes between source and target
     const pathNodes = findPathNodes(sourceId, targetId)
-    
+
     // Remove all intermediate nodes and their connections in one batch
     if (pathNodes.length > 0) {
       setNodes((prev) => prev.filter((n) => !pathNodes.includes(n.id)))
-      
-      // Remove all connections that involve intermediate nodes
-      setConnections((prev) =>
-        prev.filter((c) => !pathNodes.includes(c.source) && !pathNodes.includes(c.target))
-      )
     }
 
-    // Create the new direct connection
-    const newConnection = {
-      id: `conn-${sourceId}-${targetId}`,
-      source: sourceId,
-      target: targetId,
-    }
-    setConnections((prev) => [...prev, newConnection])
+    // Enforce one incoming connection per target node:
+    // if target already has an inbound line, replace it with the new one.
+    setConnections((prev) => {
+      const filtered = prev.filter((c) => {
+        if (pathNodes.includes(c.source) || pathNodes.includes(c.target)) return false
+        if (c.target === targetId) return false
+        return true
+      })
+
+      return [
+        ...filtered,
+        {
+          id: `conn-${sourceId}-${targetId}`,
+          source: sourceId,
+          target: targetId,
+        },
+      ]
+    })
   }, [connections])
 
   const removeConnection = useCallback((connectionId) => {
