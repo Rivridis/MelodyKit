@@ -350,7 +350,10 @@ bool BackendHost::setMasterEffectBypassed(const juce::String& effectId,
 }
 
 void BackendHost::processTrackEffectChain(const juce::String& trackId, juce::AudioBuffer<float>& buffer) {
-    const juce::ScopedLock sl(tracksLock);
+    const juce::ScopedTryLock sl(tracksLock);
+    if (!sl.isLocked()) {
+        return; // Never block audio thread; skip effects for this block if busy.
+    }
     
     auto it = tracks.find(trackId);
     if (it == tracks.end()) {

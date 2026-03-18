@@ -19,6 +19,8 @@ class PluginEditorWindow;
 class GainAudioCallback;
 class SF2AudioCallback;
 class BeatAudioCallback;
+class SamplerAudioCallback;
+class HostMixAudioCallback;
 
 // MIDI note event for rendering
 struct MidiNoteEvent {
@@ -224,6 +226,14 @@ public:
 
 private:
     void prepareDevice();
+    void processRealtimeAudio(const float* const* inputChannelData,
+                              int numInputChannels,
+                              float* const* outputChannelData,
+                              int numOutputChannels,
+                              int numSamples,
+                              const juce::AudioIODeviceCallbackContext& context);
+    void handleAudioDeviceAboutToStart(juce::AudioIODevice* device);
+    void handleAudioDeviceStopped();
     std::unique_ptr<juce::AudioPluginInstance> createPlugin(const juce::File& file, double sampleRate, int blockSize, juce::String& errorMessage);
     void sendNoteOff(const juce::String& trackId, int midiNote, int channel);
 
@@ -283,12 +293,13 @@ private:
     std::map<juce::String, std::map<juce::String, std::shared_ptr<BeatSample>>> beatSamples; // trackId -> rowId -> sample
     std::map<juce::String, std::vector<BeatVoice>> beatVoices; // trackId -> active voices
     mutable juce::CriticalSection beatLock;
+    std::unique_ptr<HostMixAudioCallback> hostMixCallback;
     std::unique_ptr<BeatAudioCallback> beatCallback;
-
-    std::unique_ptr<juce::AudioIODeviceCallback> masterEffectCallback;
 
     std::map<juce::String, std::shared_ptr<BeatSample>> samplerSamples; // trackId -> loaded sample
     std::map<juce::String, std::vector<SamplerVoice>> samplerVoices; // trackId -> active voices
     mutable juce::CriticalSection samplerLock;
-    std::unique_ptr<juce::AudioIODeviceCallback> samplerCallback;
+    std::unique_ptr<SamplerAudioCallback> samplerCallback;
+
+    friend class HostMixAudioCallback;
 };

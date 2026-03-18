@@ -80,8 +80,8 @@ api.backend = {
   getTrackEffects: (trackId) => ipcRenderer.invoke('backend:get-track-effects', trackId),
   setEffectBypassed: (trackId, effectId, bypassed) => ipcRenderer.invoke('backend:set-effect-bypassed', { trackId, effectId, bypassed }),
   // Master track effect management
-  addMasterEffect: (effectType) => ipcRenderer.invoke('backend:add-master-effect', effectType),
-  removeMasterEffect: (effectId) => ipcRenderer.invoke('backend:remove-master-effect', effectId),
+  addMasterEffect: (effectType) => ipcRenderer.invoke('backend:add-master-effect', { effectType }),
+  removeMasterEffect: (effectId) => ipcRenderer.invoke('backend:remove-master-effect', { effectId }),
   setMasterEffectParameter: (effectId, paramIndex, value) => ipcRenderer.invoke('backend:set-master-effect-parameter', { effectId, paramIndex, value }),
   getMasterEffectParameter: (effectId, paramIndex) => ipcRenderer.invoke('backend:get-master-effect-parameter', { effectId, paramIndex }),
   getMasterEffects: () => ipcRenderer.invoke('backend:get-master-effects'),

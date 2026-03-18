@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <iostream>
 #include <cmath>
+#include <vector>
 
 // SF2 audio callback for TinySoundFont rendering
 class SF2AudioCallback : public juce::AudioIODeviceCallback {
@@ -53,14 +54,14 @@ public:
                 outputChannelData[0][i] = (tempBuffer[i * 2] + tempBuffer[i * 2 + 1]) * 0.5f * gain;
             }
         }
-        
+
         // Clear additional channels
         for (int ch = 2; ch < numOutputChannels; ++ch) {
             if (outputChannelData[ch]) {
                 juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
             }
         }
-        
+
         // Apply track effect chain
         if (backendHost && numOutputChannels > 0) {
             juce::AudioBuffer<float> trackBuffer(outputChannelData, numOutputChannels, numSamples);
@@ -112,13 +113,13 @@ public:
         player->audioDeviceIOCallbackWithContext(inputChannelData, numInputChannels,
                                                   outputChannelData, numOutputChannels,
                                                   numSamples, context);
-        
+
         // Apply track effect chain
         if (backendHost && numOutputChannels > 0) {
             juce::AudioBuffer<float> trackBuffer(outputChannelData, numOutputChannels, numSamples);
             backendHost->processTrackEffectChain(trackId, trackBuffer);
         }
-        
+
         // Apply gain to output
         const float gain = *gainLinearPtr;
         if (gain != 1.0f) {
@@ -162,13 +163,6 @@ public:
                                           int numSamples,
                                           const juce::AudioIODeviceCallbackContext& /*context*/) override {
         if (!outputChannelData || numSamples <= 0 || numOutputChannels <= 0) return;
-
-        // Clear output buffer before mixing beat voices to avoid stale data buzzing
-        for (int ch = 0; ch < numOutputChannels; ++ch) {
-            if (outputChannelData[ch]) {
-                juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
-            }
-        }
 
         const juce::ScopedLock sl(mapLock);
         juce::ignoreUnused(sampleMap);
@@ -251,13 +245,6 @@ public:
                                           const juce::AudioIODeviceCallbackContext& /*context*/) override {
         if (!outputChannelData || numSamples <= 0 || numOutputChannels <= 0) return;
 
-        // Clear output buffer
-        for (int ch = 0; ch < numOutputChannels; ++ch) {
-            if (outputChannelData[ch]) {
-                juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
-            }
-        }
-
         const juce::ScopedLock sl(mapLock);
         juce::ignoreUnused(sampleMap);
         if (voiceMap.empty()) return;
@@ -321,6 +308,33 @@ private:
     std::map<juce::String, std::vector<BackendHost::SamplerVoice>>& voiceMap;
     juce::CriticalSection& mapLock;
     double currentRate = 44100.0;
+};
+
+// Clears the shared device output buffer once per callback cycle before additive mixing.
+class OutputClearAudioCallback : public juce::AudioIODeviceCallback {
+public:
+    OutputClearAudioCallback() = default;
+
+    void audioDeviceIOCallbackWithContext(const float* const* /*inputChannelData*/,
+                                          int /*numInputChannels*/,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& /*context*/) override {
+        if (!outputChannelData || numOutputChannels <= 0 || numSamples <= 0) return;
+
+        for (int ch = 0; ch < numOutputChannels; ++ch) {
+            if (outputChannelData[ch]) {
+                juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+            }
+        }
+    }
+
+    void audioDeviceAboutToStart(juce::AudioIODevice* /*device*/) override {}
+    void audioDeviceStopped() override {}
+
+private:
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OutputClearAudioCallback)
 };
 
 // Master effect processing callback - applied after all track/beat/sampler audio has been mixed
@@ -389,6 +403,45 @@ void emit(const juce::String& msg) {
 }
 }
 
+// Single realtime callback that owns clear -> source mix -> master FX order.
+class HostMixAudioCallback : public juce::AudioIODeviceCallback {
+public:
+    explicit HostMixAudioCallback(BackendHost* host)
+        : backendHost(host) {}
+
+    void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
+                                          int numInputChannels,
+                                          float* const* outputChannelData,
+                                          int numOutputChannels,
+                                          int numSamples,
+                                          const juce::AudioIODeviceCallbackContext& context) override {
+        if (backendHost) {
+            backendHost->processRealtimeAudio(inputChannelData,
+                                              numInputChannels,
+                                              outputChannelData,
+                                              numOutputChannels,
+                                              numSamples,
+                                              context);
+        }
+    }
+
+    void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
+        if (backendHost) {
+            backendHost->handleAudioDeviceAboutToStart(device);
+        }
+    }
+
+    void audioDeviceStopped() override {
+        if (backendHost) {
+            backendHost->handleAudioDeviceStopped();
+        }
+    }
+
+private:
+    BackendHost* backendHost = nullptr;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HostMixAudioCallback)
+};
+
 BackendHost::BackendHost() {
     // Manually register VST3 format (addDefaultFormats is deleted in console builds)
 #if JUCE_PLUGINHOST_VST3
@@ -399,41 +452,29 @@ BackendHost::BackendHost() {
 
     // Shared beat mixer callback (handles all beat tracks)
     beatCallback = std::make_unique<BeatAudioCallback>(beatSamples, beatVoices, beatLock);
-    deviceManager.addAudioCallback(beatCallback.get());
 
     // Shared sampler callback (handles all sampler tracks)
     samplerCallback = std::make_unique<SamplerAudioCallback>(samplerSamples, samplerVoices, samplerLock);
-    deviceManager.addAudioCallback(samplerCallback.get());
 
-    // Master effect processing callback (applied after all tracks are mixed)
-    masterEffectCallback = std::make_unique<MasterEffectAudioCallback>(this);
-    deviceManager.addAudioCallback(masterEffectCallback.get());
+    // Single callback to guarantee deterministic clear -> mix -> master ordering.
+    hostMixCallback = std::make_unique<HostMixAudioCallback>(this);
+    deviceManager.addAudioCallback(hostMixCallback.get());
 }
 
 BackendHost::~BackendHost() {
-    if (masterEffectCallback) {
-        deviceManager.removeAudioCallback(masterEffectCallback.get());
-        masterEffectCallback.reset();
+    if (hostMixCallback) {
+        deviceManager.removeAudioCallback(hostMixCallback.get());
+        hostMixCallback.reset();
     }
-    if (samplerCallback) {
-        deviceManager.removeAudioCallback(samplerCallback.get());
-        samplerCallback.reset();
-    }
-    if (beatCallback) {
-        deviceManager.removeAudioCallback(beatCallback.get());
-        beatCallback.reset();
-    }
+
+    samplerCallback.reset();
+    beatCallback.reset();
+
     const juce::ScopedLock sl(tracksLock);
     for (auto& [trackId, track] : tracks) {
         if (track.editorWindow) {
             track.editorWindow->setVisible(false);
             track.editorWindow.reset();
-        }
-        if (track.sf2Callback) {
-            deviceManager.removeAudioCallback(track.sf2Callback.get());
-        }
-        if (track.gainCallback) {
-            deviceManager.removeAudioCallback(track.gainCallback.get());
         }
         if (track.player) {
             track.player->setProcessor(nullptr);
@@ -473,6 +514,102 @@ int BackendHost::getBlockSize() const {
         return device->getCurrentBufferSizeSamples();
     }
     return 512;
+}
+
+void BackendHost::processRealtimeAudio(const float* const* inputChannelData,
+                                       int numInputChannels,
+                                       float* const* outputChannelData,
+                                       int numOutputChannels,
+                                       int numSamples,
+                                       const juce::AudioIODeviceCallbackContext& context) {
+    if (!outputChannelData || numOutputChannels <= 0 || numSamples <= 0) return;
+
+    // Always start from silence to avoid stale buffer artifacts.
+    for (int ch = 0; ch < numOutputChannels; ++ch) {
+        if (outputChannelData[ch]) {
+            juce::FloatVectorOperations::clear(outputChannelData[ch], numSamples);
+        }
+    }
+
+    juce::AudioBuffer<float> tempBuffer(numOutputChannels, numSamples);
+    std::vector<float*> tempChannels((size_t)numOutputChannels);
+    auto prepareTemp = [&]() {
+        tempBuffer.clear();
+        for (int ch = 0; ch < numOutputChannels; ++ch) {
+            tempChannels[(size_t)ch] = tempBuffer.getWritePointer(ch);
+        }
+    };
+
+    {
+        const juce::ScopedLock sl(tracksLock);
+        for (auto& [trackId, track] : tracks) {
+            juce::ignoreUnused(trackId);
+            juce::AudioIODeviceCallback* cb = nullptr;
+            if (track.sf2Callback) cb = track.sf2Callback.get();
+            else if (track.gainCallback) cb = track.gainCallback.get();
+
+            if (!cb) continue;
+
+            prepareTemp();
+            cb->audioDeviceIOCallbackWithContext(inputChannelData,
+                                                 numInputChannels,
+                                                 tempChannels.data(),
+                                                 numOutputChannels,
+                                                 numSamples,
+                                                 context);
+
+            for (int ch = 0; ch < numOutputChannels; ++ch) {
+                if (outputChannelData[ch]) {
+                    juce::FloatVectorOperations::add(outputChannelData[ch], tempBuffer.getReadPointer(ch), numSamples);
+                }
+            }
+        }
+    }
+
+    if (beatCallback) {
+        beatCallback->audioDeviceIOCallbackWithContext(inputChannelData,
+                                                       numInputChannels,
+                                                       outputChannelData,
+                                                       numOutputChannels,
+                                                       numSamples,
+                                                       context);
+    }
+
+    if (samplerCallback) {
+        samplerCallback->audioDeviceIOCallbackWithContext(inputChannelData,
+                                                          numInputChannels,
+                                                          outputChannelData,
+                                                          numOutputChannels,
+                                                          numSamples,
+                                                          context);
+    }
+
+    juce::AudioBuffer<float> masterBuffer(outputChannelData, numOutputChannels, numSamples);
+    processMasterEffectChain(masterBuffer);
+}
+
+void BackendHost::handleAudioDeviceAboutToStart(juce::AudioIODevice* device) {
+    if (beatCallback) beatCallback->audioDeviceAboutToStart(device);
+    if (samplerCallback) samplerCallback->audioDeviceAboutToStart(device);
+
+    const juce::ScopedLock sl(tracksLock);
+    for (auto& [trackId, track] : tracks) {
+        juce::ignoreUnused(trackId);
+        if (track.sf2Callback) track.sf2Callback->audioDeviceAboutToStart(device);
+        if (track.gainCallback) track.gainCallback->audioDeviceAboutToStart(device);
+    }
+}
+
+void BackendHost::handleAudioDeviceStopped() {
+    if (beatCallback) beatCallback->audioDeviceStopped();
+    if (samplerCallback) samplerCallback->audioDeviceStopped();
+
+    const juce::ScopedLock sl(tracksLock);
+    for (auto& [trackId, track] : tracks) {
+        juce::ignoreUnused(trackId);
+        if (track.sf2Callback) track.sf2Callback->audioDeviceStopped();
+        if (track.gainCallback) track.gainCallback->audioDeviceStopped();
+    }
 }
 
 std::unique_ptr<juce::AudioPluginInstance> BackendHost::createPlugin(
@@ -524,9 +661,7 @@ bool BackendHost::loadPlugin(const juce::String& trackId, const juce::File& file
     // Unload existing plugin for this track if any
     auto it = tracks.find(trackId);
     if (it != tracks.end()) {
-        // IMPORTANT: Remove audio callbacks BEFORE freeing resources they depend on
         if (it->second.gainCallback) {
-            deviceManager.removeAudioCallback(it->second.gainCallback.get());
             it->second.gainCallback.reset(); // Clear the callback
         }
         if (it->second.player) {
@@ -548,9 +683,6 @@ bool BackendHost::loadPlugin(const juce::String& trackId, const juce::File& file
     // Create gain wrapper callback with effect chain support and master effect support
     track.gainCallback = std::make_unique<GainAudioCallback>(track.player.get(), &track.gainLinear, this, trackId);
     
-    // Add the gain callback as an audio callback (not the player directly)
-    deviceManager.addAudioCallback(track.gainCallback.get());
-
     emit("EVENT LOADED " + trackId + " " + file.getFullPathName());
     return true;
 }
@@ -566,13 +698,12 @@ void BackendHost::unloadPlugin(const juce::String& trackId) {
         it->second.editorWindow.reset();
     }
     
-    // IMPORTANT: Remove audio callbacks BEFORE freeing resources they depend on
     if (it->second.sf2Callback) {
-        deviceManager.removeAudioCallback(it->second.sf2Callback.get());
+        it->second.sf2Callback.reset();
     }
     
     if (it->second.gainCallback) {
-        deviceManager.removeAudioCallback(it->second.gainCallback.get());
+        it->second.gainCallback.reset();
     }
     
     if (it->second.player) {
@@ -969,13 +1100,10 @@ bool BackendHost::loadSF2(const juce::String& trackId, const juce::File& file, j
     // Unload existing plugin/SF2 for this track if any
     auto it = tracks.find(trackId);
     if (it != tracks.end()) {
-        // IMPORTANT: Remove audio callbacks BEFORE freeing resources they depend on
         if (it->second.sf2Callback) {
-            deviceManager.removeAudioCallback(it->second.sf2Callback.get());
             it->second.sf2Callback.reset(); // Clear the callback
         }
         if (it->second.gainCallback) {
-            deviceManager.removeAudioCallback(it->second.gainCallback.get());
             it->second.gainCallback.reset(); // Clear the callback
         }
         if (it->second.player) {
@@ -1021,9 +1149,6 @@ bool BackendHost::loadSF2(const juce::String& trackId, const juce::File& file, j
         track.sf2CurrentBank = 0;
         track.sf2CurrentPreset = 0;
     }
-    
-    // Add to audio device
-    deviceManager.addAudioCallback(track.sf2Callback.get());
     
     emit("EVENT LOADED_SF2 " + trackId + " " + track.sf2Name);
     return true;
