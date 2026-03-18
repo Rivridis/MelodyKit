@@ -7,6 +7,8 @@ import SequencerPanel from './components/SequencerPanel'
 import AddTrackModal from './components/AddTrackModal'
 import { initBackend } from './utils/vstBackend'
 import { loadSF2 } from './utils/vstBackend'
+import { registerVSTTrackPath, unregisterVSTTrackPath } from './utils/vstBackend'
+import { loadVST } from './utils/vstBackend'
 import { NodeGraph, useNodeGraph } from './components/NodeGraph'
 
 // Helper to wait for backend response via event stream
@@ -545,9 +547,10 @@ function App() {
                   20000
                 )
                 
-                const loadResult = await window.api?.backend?.loadVST?.(trackId, vstPath)
-                
-                if (loadResult && loadResult.ok) {
+                const loadOk = await loadVST(trackId, vstPath)
+
+                if (loadOk) {
+                  registerVSTTrackPath(trackId, vstPath)
                   const readyEvent = await readyEventPromise
                   if (readyEvent.startsWith(`EVENT READY ${trackId}`)) {
                     console.log(`[Auto-Load] ✓ VST READY for track ${trackId}`)
@@ -673,10 +676,12 @@ function App() {
     // Track VST plugin path if present
     if (instrument && instrument.vstPath) {
       console.log(`VST loaded for track ${trackId}: ${instrument.vstPath}`)
+      registerVSTTrackPath(trackId, instrument.vstPath)
       setTrackVSTPlugins(prev => ({ ...prev, [String(trackId)]: instrument.vstPath }))
     } else {
       // Remove VST plugin if switching to SF2 or no instrument
       console.log(`Removing VST for track ${trackId}`)
+      unregisterVSTTrackPath(trackId)
       setTrackVSTPlugins(prev => {
         const updated = { ...prev }
         delete updated[String(trackId)]

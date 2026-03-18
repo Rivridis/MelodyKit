@@ -683,6 +683,13 @@ bool BackendHost::loadPlugin(const juce::String& trackId, const juce::File& file
     // Create gain wrapper callback with effect chain support and master effect support
     track.gainCallback = std::make_unique<GainAudioCallback>(track.player.get(), &track.gainLinear, this, trackId);
     
+    // If audio device is already running, initialize the callback immediately
+    // Otherwise it will be initialized when handleAudioDeviceAboutToStart is called
+    juce::AudioIODevice* device = deviceManager.getCurrentAudioDevice();
+    if (device) {
+        track.gainCallback->audioDeviceAboutToStart(device);
+    }
+    
     emit("EVENT LOADED " + trackId + " " + file.getFullPathName());
     return true;
 }
@@ -1213,7 +1220,10 @@ bool BackendHost::playNote(const juce::String& trackId, int midiNote, float velo
     const juce::ScopedLock sl(tracksLock);
     
     auto it = tracks.find(trackId);
-    if (it == tracks.end()) return false;
+    if (it == tracks.end()) {
+        emit("DEBUG NOTE_FAIL " + trackId + " track-not-found");
+        return false;
+    }
     
     TrackState& track = it->second;
     velocity01 = juce::jlimit(0.0f, 1.0f, velocity01);
@@ -1246,9 +1256,28 @@ bool BackendHost::playNote(const juce::String& trackId, int midiNote, float velo
         track.activeNoteTimers[key].timer = std::move(timer);
         return true;
     }
-    
-    // Handle VST plugin playback
-    if (!track.plugin) return false;
+
+    // Handle VST playback.
+    if (!track.plugin) {
+        emit("DEBUG NOTE_FAIL " + trackId + " no-plugin");
+        return false;
+    }
+
+    // Defensive recovery: if plugin exists but realtime player/callback path is missing,
+    // recreate it so NOTE commands can recover after backend/runtime state drift.
+    if (!track.player) {
+        track.player = std::make_unique<juce::AudioProcessorPlayer>();
+        track.player->setProcessor(track.plugin.get());
+        track.player->getMidiMessageCollector().reset(getSampleRate());
+    }
+    if (!track.gainCallback) {
+        track.gainCallback = std::make_unique<GainAudioCallback>(track.player.get(), &track.gainLinear, this, trackId);
+        // Initialize callback if audio device is running
+        juce::AudioIODevice* device = deviceManager.getCurrentAudioDevice();
+        if (device) {
+            track.gainCallback->audioDeviceAboutToStart(device);
+        }
+    }
     
     // Send note-on immediately
     juce::MidiMessage on = juce::MidiMessage::noteOn(channel, midiNote, velocity01);
@@ -1358,7 +1387,22 @@ bool BackendHost::setTrackVolume(const juce::String& trackId, int volume, int ch
     const juce::ScopedLock sl(tracksLock);
     
     auto it = tracks.find(trackId);
-    if (it == tracks.end() || !it->second.player) return false;
+    if (it == tracks.end()) return false;
+
+    // SF2 tracks use linear gain directly and don't require a player.
+    if (it->second.soundFont) {
+        volume = juce::jlimit(0, 127, volume);
+        it->second.gainLinear = (volume / 64.0f);
+        return true;
+    }
+
+    // Defensive recovery for VST path.
+    if (it->second.plugin && !it->second.player) {
+        it->second.player = std::make_unique<juce::AudioProcessorPlayer>();
+        it->second.player->setProcessor(it->second.plugin.get());
+        it->second.player->getMidiMessageCollector().reset(getSampleRate());
+    }
+    if (!it->second.player) return false;
     
     // Clamp volume to MIDI range 0-127
     volume = juce::jlimit(0, 127, volume);

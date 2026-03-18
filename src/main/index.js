@@ -135,6 +135,19 @@ app.whenReady().then(() => {
 
   // Backend process bridge
   let backendProc = null
+
+  const isPipeError = (err) => {
+    const msg = String(err || '')
+    return msg.includes('EPIPE') || msg.includes('ERR_STREAM_DESTROYED') || msg.includes('write after end')
+  }
+
+  const resetBackendProc = () => {
+    if (backendProc) {
+      try { backendProc.kill() } catch {}
+      backendProc = null
+    }
+  }
+
   const spawnBackendIfAvailable = () => {
     if (backendProc) return backendProc
     const candidates = []
@@ -159,6 +172,11 @@ app.whenReady().then(() => {
 
     const { spawn } = require('child_process')
     backendProc = spawn(exe, [], { stdio: ['pipe', 'pipe', 'pipe'] })
+
+    backendProc.on('error', (err) => {
+      console.error('[backend:proc:error]', String(err))
+      if (backendProc && backendProc.killed) backendProc = null
+    })
 
     // Buffer for accumulating incomplete lines
     let stdoutBuffer = ''
@@ -189,6 +207,29 @@ app.whenReady().then(() => {
       const s = data.toString().trim()
       console.error('[backend:err]', s)
     })
+
+    if (backendProc.stdin) {
+      backendProc.stdin.on('error', (err) => {
+        console.error('[backend:stdin:error]', String(err))
+        // Avoid keeping a stale process reference after pipe break.
+        if (isPipeError(err)) {
+          backendProc = null
+        }
+      })
+    }
+
+    if (backendProc.stdout) {
+      backendProc.stdout.on('error', (err) => {
+        console.error('[backend:stdout:error]', String(err))
+      })
+    }
+
+    if (backendProc.stderr) {
+      backendProc.stderr.on('error', (err) => {
+        console.error('[backend:stderr:error]', String(err))
+      })
+    }
+
     backendProc.on('exit', (code, signal) => {
       console.log('Backend exited', code, signal)
       backendProc = null
@@ -200,14 +241,43 @@ app.whenReady().then(() => {
     return backendProc
   }
 
-  const sendToBackend = (line) => {
-    const p = spawnBackendIfAvailable()
+  const writeBackendLine = (proc, payload) => {
+    return new Promise((resolve, reject) => {
+      if (!proc || !proc.stdin || proc.stdin.destroyed || !proc.stdin.writable) {
+        reject(new Error('backend-stdin-unavailable'))
+        return
+      }
+
+      proc.stdin.write(payload + '\n', (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+  }
+
+  const sendToBackend = async (line) => {
+    let p = spawnBackendIfAvailable()
     if (!p) return { ok: false, error: 'backend-not-found' }
+
     try {
-      p.stdin.write(line + '\n')
+      await writeBackendLine(p, line)
       return { ok: true }
     } catch (e) {
-      return { ok: false, error: String(e) }
+      if (!isPipeError(e) && String(e) !== 'Error: backend-stdin-unavailable') {
+        return { ok: false, error: String(e) }
+      }
+
+      // Backend pipe broke. Reset stale handle and try once with a fresh process.
+      resetBackendProc()
+      p = spawnBackendIfAvailable()
+      if (!p) return { ok: false, error: 'backend-restart-failed' }
+
+      try {
+        await writeBackendLine(p, line)
+        return { ok: true, restarted: true }
+      } catch (retryErr) {
+        return { ok: false, error: String(retryErr), restarted: true }
+      }
     }
   }
 

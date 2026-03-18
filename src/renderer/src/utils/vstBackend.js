@@ -2,6 +2,82 @@
 
 let backendReady = false
 let backendEventUnsubscribe = null
+const trackVSTPaths = new Map()
+const pendingVSTRecoveries = new Set()
+const readyVSTTracks = new Set()
+const pendingVSTRecoveryPromises = new Map()
+
+function waitForTrackLoadEvent(trackId, timeoutMs = 20000) {
+  const id = String(trackId)
+
+  return new Promise((resolve, reject) => {
+    let unsubscribe = null
+    const timeout = setTimeout(() => {
+      if (unsubscribe) unsubscribe()
+      reject(new Error(`timeout waiting for VST READY on track ${id}`))
+    }, timeoutMs)
+
+    unsubscribe = window.api.backend.onEvent((line) => {
+      if (line.startsWith(`EVENT READY ${id} `)) {
+        clearTimeout(timeout)
+        if (unsubscribe) unsubscribe()
+        resolve({ ok: true, line })
+        return
+      }
+
+      if (line.startsWith(`ERROR LOAD ${id} `)) {
+        clearTimeout(timeout)
+        if (unsubscribe) unsubscribe()
+        resolve({ ok: false, line })
+      }
+    })
+  })
+}
+
+async function recoverVSTTrack(trackId) {
+  const id = String(trackId)
+  const pluginPath = trackVSTPaths.get(id)
+  if (!pluginPath) return false
+  if (pendingVSTRecoveryPromises.has(id)) return pendingVSTRecoveryPromises.get(id)
+  if (pendingVSTRecoveries.has(id)) return false
+
+  pendingVSTRecoveries.add(id)
+  readyVSTTracks.delete(id)
+
+  const recoveryPromise = (async () => {
+    try {
+      console.warn(`[Backend] Auto-recovering VST track ${id} after no-plugin-loaded`)
+      const ok = await loadVST(id, pluginPath)
+      return !!ok
+    } catch (e) {
+      console.error(`[Backend] VST auto-recovery failed for track ${id}:`, e)
+      return false
+    } finally {
+      pendingVSTRecoveries.delete(id)
+      pendingVSTRecoveryPromises.delete(id)
+    }
+  })()
+
+  pendingVSTRecoveryPromises.set(id, recoveryPromise)
+  return recoveryPromise
+}
+
+async function ensureVSTTrackReady(trackId) {
+  const id = String(trackId)
+  if (readyVSTTracks.has(id)) return true
+
+  const pending = pendingVSTRecoveryPromises.get(id)
+  if (pending) {
+    try {
+      return !!(await pending)
+    } catch {
+      return false
+    }
+  }
+
+  if (!trackVSTPaths.has(id)) return false
+  return !!(await recoverVSTTrack(id))
+}
 
 // Initialize backend listener for event stream
 export function initBackend() {
@@ -10,14 +86,34 @@ export function initBackend() {
   backendEventUnsubscribe = window.api.backend.onEvent((line) => {
     if (line.startsWith('EVENT READY')) {
       backendReady = true
+      const parts = line.split(' ')
+      if (parts.length >= 3) {
+        const trackId = parts[2]
+        readyVSTTracks.add(String(trackId))
+        console.log(`[Backend] Track ${trackId} marked ready`)
+      }
     } else if (line.startsWith('EVENT LOADED')) {
       backendReady = true
     } else if (line.startsWith('EVENT READY_SF2') || line.startsWith('EVENT LOADED_SF2')) {
       backendReady = true
+    } else if (line.startsWith('EVENT EXIT')) {
+      // Backend process restarted or exited: runtime plugin state is gone.
+      readyVSTTracks.clear()
+      console.warn('[Backend] Backend exited; all VST tracks cleared from readiness')
     } else if (line.startsWith('ERROR')) {
       // ERROR GET_STATE is an expected probe response (used to detect unloaded plugins), not a real error
       if (!line.includes('ERROR GET_STATE')) {
         console.error('[Backend]', line)
+
+        // If backend lost track plugin state (e.g. after process restart), auto-reload known VST once.
+        const parts = line.split(' ')
+        if (parts.length >= 4 && parts[0] === 'ERROR' && (parts[1] === 'NOTE' || parts[1] === 'VOLUME') && parts[3] === 'no-plugin-loaded') {
+          const trackId = parts[2]
+          console.warn(`[Backend] Detected no-plugin-loaded for track ${trackId}, initiating recovery`)
+          readyVSTTracks.delete(String(trackId))
+          // Use concurrency control via the promise map - if recovery is in flight, this will return that promise
+          void recoverVSTTrack(trackId)
+        }
       }
     }
   })
@@ -26,25 +122,54 @@ export function initBackend() {
 // Load a VST plugin by absolute path for a specific track
 export async function loadVST(trackId, pluginPath) {
   try {
-    const res = await window.api.backend.loadVST(String(trackId), pluginPath)
+    const id = String(trackId)
+    const readyPromise = waitForTrackLoadEvent(id, 20000)
+    const res = await window.api.backend.loadVST(id, pluginPath)
     if (!res.ok) {
       console.error(`Failed to load VST for track ${trackId}:`, res.error)
       return false
     }
+
+    const readyResult = await readyPromise
+    if (!readyResult.ok) {
+      console.error(`Backend reported VST load error for track ${trackId}:`, readyResult.line)
+      readyVSTTracks.delete(id)
+      return false
+    }
+
+    trackVSTPaths.set(id, pluginPath)
+    readyVSTTracks.add(id)
     backendReady = true
     
     // Set initial volume to 32 (50% of center 64 for reduced VST loudness)
     try {
-      await window.api.backend.setVolume(String(trackId), 32, 1)
+      await window.api.backend.setVolume(id, 32, 1)
     } catch (e) {
       console.warn(`Failed to set initial volume for track ${trackId}:`, e)
     }
     
     return true
   } catch (e) {
+    readyVSTTracks.delete(String(trackId))
     console.error(`Error loading VST for track ${trackId}:`, e)
     return false
   }
+}
+
+// Register a VST path for a track so backend auto-recovery can reload it if backend state is lost.
+export function registerVSTTrackPath(trackId, pluginPath) {
+  const id = String(trackId)
+  if (!pluginPath || typeof pluginPath !== 'string') return
+  trackVSTPaths.set(id, pluginPath)
+}
+
+// Forget a VST path registration (e.g. when switching away from VST on a track).
+export function unregisterVSTTrackPath(trackId) {
+  const id = String(trackId)
+  trackVSTPaths.delete(id)
+  readyVSTTracks.delete(id)
+  pendingVSTRecoveries.delete(id)
+  pendingVSTRecoveryPromises.delete(id)
 }
 
 // Load an SF2 SoundFont from resources for a specific track
@@ -89,6 +214,7 @@ export async function setSF2Preset(trackId, bank, preset) {
 // Unload VST plugin for a specific track (frontend-only, closes editor)
 export async function unloadVST(trackId) {
   try {
+    unregisterVSTTrackPath(trackId)
     // Just close the editor window - no need to send command to backend
     // The frontend will handle state updates (useVSTBackend flag)
     await closeVSTEditor(trackId)
@@ -108,8 +234,33 @@ export async function playBackendNote(trackId, midiNote, velocity = 0.8, duratio
   }
   
   try {
+    const id = String(trackId)
+
+    // For known VST tracks, ensure readiness before sending note.
+    // Even if the track is marked ready, we need to gate on recovery if it's in-flight.
+    if (trackVSTPaths.has(id)) {
+      // If pending recovery exists for this track, wait for it (recovery may have been triggered by a previous error)
+      const pending = pendingVSTRecoveryPromises.get(id)
+      if (pending) {
+        console.log(`[VST] Waiting for recovery to complete for track ${id}...`)
+        const recovered = await pending
+        if (!recovered) {
+          console.warn(`Backend VST track ${id} recovery failed; skipping note send`)
+          return false
+        }
+        console.log(`[VST] Recovery completed for track ${id}, sending note`)
+      } else if (!readyVSTTracks.has(id)) {
+        // If no recovery is pending but track is not ready, trigger recovery
+        const recovered = await ensureVSTTrackReady(id)
+        if (!recovered) {
+          console.warn(`Backend VST track ${id} not ready; skipping note send`)
+          return false
+        }
+      }
+    }
+
     const res = await window.api.backend.noteOn({ 
-      trackId: String(trackId),
+      trackId: id,
       note: midiNote, 
       velocity, 
       durationMs, 
