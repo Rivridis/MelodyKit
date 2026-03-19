@@ -437,6 +437,15 @@ export const useNodeGraph = (tracks) => {
     )
   }, [nodes])
 
+  const restoreFromSave = useCallback((savedNodes, savedConnections) => {
+    if (Array.isArray(savedNodes)) {
+      setNodes(savedNodes)
+    }
+    if (Array.isArray(savedConnections)) {
+      setConnections(savedConnections)
+    }
+  }, [])
+
   return {
     nodes,
     connections,
@@ -452,6 +461,7 @@ export const useNodeGraph = (tracks) => {
     connectNodes,
     removeConnection,
     replaceEffectNode,
+    restoreFromSave,
     AVAILABLE_EFFECTS,
   }
 }

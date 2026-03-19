@@ -809,7 +809,9 @@ function App() {
       trackSamplerPaths,
       trackMuted,
       trackSoloed,
-      trackAutomation
+      trackAutomation,
+      fxGraphNodes: nodeGraphState.nodes,
+      fxGraphConnections: nodeGraphState.connections
     }
   }
 
@@ -1003,6 +1005,21 @@ function App() {
       setTrackSamplerPaths(nextTrackSamplerPaths)
       setSelectedTrackId(null)
       setCurrentProjectPath(resp.path || null)
+      
+      // Restore FX graph from saved data
+      const nextFxGraphNodes = (p.fxGraphNodes && Array.isArray(p.fxGraphNodes)) ? p.fxGraphNodes : [
+        {
+          id: 'master',
+          type: 'master',
+          position: { x: 50, y: 50 },
+          label: 'Master',
+          isLocked: true,
+        },
+      ]
+      const nextFxGraphConnections = (p.fxGraphConnections && Array.isArray(p.fxGraphConnections)) ? p.fxGraphConnections : []
+      
+      console.log('[Load] Restoring FX graph with', nextFxGraphNodes.length, 'nodes and', nextFxGraphConnections.length, 'connections')
+      nodeGraphState.restoreFromSave(nextFxGraphNodes, nextFxGraphConnections)
       
       // Restore sampler tracks - load samples in background
       recomputedTracks.forEach(track => {
@@ -1281,7 +1298,7 @@ function App() {
         clearTimeout(autosaveTimerRef.current)
       }
     }
-  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackRegions, trackVSTMode, trackVSTPlugins, trackVSTPresets, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring])
+  }, [tracks, trackNotes, trackInstruments, trackVolumes, trackBeats, trackOffsets, trackLengths, trackRegions, trackVSTMode, trackVSTPlugins, trackVSTPresets, trackAutomation, trackMuted, trackSoloed, bpm, gridWidth, zoom, currentProjectPath, isRestoring, nodeGraphState.nodes, nodeGraphState.connections])
 
   const timelineRef = useRef(null)
 
