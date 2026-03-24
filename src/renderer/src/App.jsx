@@ -5,6 +5,7 @@ import TrackTimeline from './components/TrackTimeline'
 import TitleBar from './components/TitleBar'
 import SequencerPanel from './components/SequencerPanel'
 import AddTrackModal from './components/AddTrackModal'
+import TrackLimitModal from './components/TrackLimitModal'
 import { initBackend } from './utils/vstBackend'
 import { loadSF2 } from './utils/vstBackend'
 import { registerVSTTrackPath, unregisterVSTTrackPath } from './utils/vstBackend'
@@ -41,6 +42,7 @@ const TRACK_COLORS = [
   '#dee12e', '#f59e0b', '#10b981', '#3b82f6', 
   '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 ]
+const MAX_FREE_TRACKS = 6
 const MIN_REGION_BEATS = 0.25
 const snapBeat = (beat) => Math.round(beat * 4) / 4
 const ceilBeat = (beat) => Math.ceil(beat * 4) / 4
@@ -96,6 +98,7 @@ function App() {
   const [isAutosaving, setIsAutosaving] = useState(false) // Autosave status indicator
   const [showWelcome, setShowWelcome] = useState(true)
   const [showAddTrackModal, setShowAddTrackModal] = useState(false)
+  const [showTrackLimitModal, setShowTrackLimitModal] = useState(false)
   const [showNodeGraph, setShowNodeGraph] = useState(false) // Toggle between timeline and node graph view
   const loadDialogOpenRef = useRef(false)
   const saveAsDialogOpenRef = useRef(false)
@@ -120,6 +123,10 @@ function App() {
 
   // Add new track
   const handleAddTrack = () => {
+    if (tracks.length >= MAX_FREE_TRACKS) {
+      setShowTrackLimitModal(true)
+      return
+    }
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const id = Date.now()
     const newTrack = {
@@ -162,6 +169,10 @@ function App() {
 
   // Add new beat (drum) track and open sequencer editor
   const handleAddBeatTrack = (packName = '') => {
+    if (tracks.length >= MAX_FREE_TRACKS) {
+      setShowTrackLimitModal(true)
+      return
+    }
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const id = Date.now()
     const newTrack = {
@@ -183,6 +194,10 @@ function App() {
   }
 
   const handleAddSamplerTrack = () => {
+    if (tracks.length >= MAX_FREE_TRACKS) {
+      setShowTrackLimitModal(true)
+      return
+    }
     const color = TRACK_COLORS[tracks.length % TRACK_COLORS.length]
     const id = Date.now()
     const newTrack = {
@@ -233,6 +248,10 @@ function App() {
   }
 
   const handleCreateLoopTrack = async (loopSound) => {
+    if (tracks.length >= MAX_FREE_TRACKS) {
+      setShowTrackLimitModal(true)
+      return
+    }
     if (!loopSound?.filePath) return
     try {
       setIsImportingAudio(true)
@@ -273,6 +292,10 @@ function App() {
   // Import audio file(s) as new audio tracks
   const handleImportAudio = async () => {
     try {
+      if (tracks.length >= MAX_FREE_TRACKS) {
+        setShowTrackLimitModal(true)
+        return
+      }
       setIsImportingAudio(true)
       setImportLoadingMessage('audio...')
       const placeholderId = Date.now()
@@ -314,7 +337,14 @@ function App() {
       const newTracks = []
       const newVolumes = { ...trackVolumes }
       const now = Date.now()
-      resp.files.forEach((file, idx) => {
+      const remainingSlots = MAX_FREE_TRACKS - tracks.length
+      const filesToAdd = resp.files.slice(0, remainingSlots)
+      
+      if (resp.files.length > remainingSlots) {
+        setShowTrackLimitModal(true)
+      }
+      
+      filesToAdd.forEach((file, idx) => {
         const color = TRACK_COLORS[(tracks.length + newTracks.length) % TRACK_COLORS.length]
         const id = now + idx
         const track = {
@@ -417,6 +447,10 @@ function App() {
 
   // Duplicate track
   const handleDuplicateTrack = async (trackId) => {
+    if (tracks.length >= MAX_FREE_TRACKS) {
+      setShowTrackLimitModal(true)
+      return
+    }
     const trackToDuplicate = tracks.find(t => t.id === trackId)
     if (!trackToDuplicate) return
     
@@ -1345,7 +1379,7 @@ function App() {
               </div>
               <div className="flex-1 space-y-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">New Session</p>
-                <h1 className="text-3xl font-semibold text-white">MelodyKit <span className="text-zinc-400">by Rivridis</span></h1>
+                <h1 className="text-3xl font-semibold text-white">MelodyKit Basic <span className="text-zinc-400">by Rivridis</span></h1>
                 <p className="text-sm leading-relaxed text-zinc-200">
                   Shape ideas like a professional! Add a track, drop in a loop, or open an existing project.
                 </p>
@@ -1559,6 +1593,10 @@ function App() {
         onCreateVstTrack={handleCreateVstTrack}
         onCreateSamplerTrack={handleCreateSamplerTrack}
         onCreateBeatTrack={handleAddBeatTrack}
+      />
+      <TrackLimitModal
+        isOpen={showTrackLimitModal}
+        onClose={() => setShowTrackLimitModal(false)}
       />
     </div>
   )
