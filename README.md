@@ -5,7 +5,7 @@ MelodyKit is a lightweight, open-source DAW focused on fast music sketching, bea
 If you want the windows installer, please purchase it, or try the basic version from https://www.patreon.com/c/Rivridis. Thanks for your support!
 
 ## Images
-<img width="1919" height="1076" alt="Screenshot 2026-01-03 174318" src="https://github.com/user-attachments/assets/a4a921df-a340-4510-9b26-f41af90da545" />
+<img width="1919" height="1079" alt="Screenshot 2026-03-09 153747" src="https://github.com/user-attachments/assets/8050d018-1aed-4533-bff4-08b7a9f64bae" />
 
 
 ## Recommended IDE Setup
