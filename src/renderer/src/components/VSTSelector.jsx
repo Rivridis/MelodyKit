@@ -125,14 +125,14 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
         <div className="p-6 overflow-y-auto max-h-[calc(85vh-140px)]">
           {/* Current VST Status */}
           {!selectOnly && useVSTBackend && currentVSTPath && (
-            <div className="mb-6 p-4 bg-amber-600/15 border border-amber-500/60 rounded-lg">
+            <div className="mb-6 p-4 bg-blue-600/15 border border-blue-500/60 rounded-lg">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-amber-600/30 rounded-lg flex items-center justify-center text-xl text-amber-100">
+                  <div className="w-10 h-10 bg-blue-600/30 rounded-lg flex items-center justify-center text-xl text-blue-100">
                     🎛️
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-amber-200">Currently Loaded</p>
+                    <p className="text-sm font-medium text-blue-200">Currently Loaded</p>
                     <p className="text-xs text-gray-300 truncate max-w-[400px]">
                       {currentVSTPath.split('\\').pop().replace('.vst3', '')}
                     </p>
@@ -150,7 +150,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
           )}
 
           {status && (
-            <div className="mb-4 p-3 bg-amber-600/15 border border-amber-500/60 rounded-lg text-amber-200 text-sm flex items-center gap-2">
+            <div className="mb-4 p-3 bg-blue-600/15 border border-blue-500/60 rounded-lg text-blue-200 text-sm flex items-center gap-2">
               <span>✓</span>
               <span>{status}</span>
             </div>
@@ -165,7 +165,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
 
           {scanning ? (
             <div className="text-center py-12">
-              <div className="animate-spin inline-block w-10 h-10 border-4 border-gray-700 border-t-amber-500 rounded-full mb-4"></div>
+              <div className="animate-spin inline-block w-10 h-10 border-4 border-gray-700 border-t-blue-500 rounded-full mb-4"></div>
               <p className="text-gray-400">Scanning for VST plugins...</p>
             </div>
           ) : (
@@ -185,7 +185,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search plugins..."
-                    className="w-full bg-[#1a1a1a] text-white px-4 py-2.5 rounded-lg border border-gray-700 focus:outline-none focus:border-amber-500 mb-3 text-sm"
+                    className="w-full bg-[#1a1a1a] text-white px-4 py-2.5 rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 mb-3 text-sm"
                   />
 
                   <div className="max-h-[320px] overflow-y-auto rounded-lg border border-gray-700 bg-[#1a1a1a]">
@@ -199,13 +199,13 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
                           }}
                           className={`w-full text-left px-4 py-3 border-b border-gray-800 last:border-b-0 transition-all ${
                             selectedVST?.path === vst.path
-                              ? 'bg-amber-600/20 border-l-4 border-l-amber-500'
+                              ? 'bg-blue-600/20 border-l-4 border-l-blue-500'
                               : 'hover:bg-gray-800/50 border-l-4 border-l-transparent'
                           }`}
                         >
                           <div className="flex items-center gap-3">
                             <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-lg ${
-                              selectedVST?.path === vst.path ? 'bg-amber-600/25 text-amber-100' : 'bg-gray-700/50'
+                              selectedVST?.path === vst.path ? 'bg-blue-600/25 text-blue-100' : 'bg-gray-700/50'
                             }`}>
                               🎹
                             </div>
@@ -214,7 +214,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
                               <div className="text-xs text-gray-500 truncate">{vst.path}</div>
                             </div>
                             {selectedVST?.path === vst.path && (
-                              <div className="text-amber-300 text-lg">✓</div>
+                              <div className="text-blue-300 text-lg">✓</div>
                             )}
                           </div>
                         </button>
@@ -238,7 +238,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
                     value={vstPath}
                     onChange={(e) => setVstPath(e.target.value)}
                     placeholder="C:\\Program Files\\Common Files\\VST3\\YourPlugin.vst3"
-                    className="w-full bg-[#1a1a1a] text-white px-4 py-2.5 rounded-lg border border-gray-700 focus:outline-none focus:border-amber-500 text-sm font-mono"
+                    className="w-full bg-[#1a1a1a] text-white px-4 py-2.5 rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleLoadVST()
                     }}
@@ -284,7 +284,7 @@ export default function VSTSelector({ trackId, currentVSTPath, useVSTBackend, on
             <button
               onClick={() => handleLoadVST()}
               disabled={loading || (!selectedVST && !vstPath.trim())}
-              className="px-5 py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-lg shadow-amber-500/25"
+              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-600 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-lg shadow-blue-500/25"
             >
               {loading ? 'Loading...' : (selectOnly ? 'Use Plugin' : 'Load Plugin')}
             </button>

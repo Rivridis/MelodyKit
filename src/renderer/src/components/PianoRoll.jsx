@@ -2027,8 +2027,8 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
             disabled={mode !== 'play'}
             className={`h-9 px-3 flex items-center justify-center ${
               mode !== 'play' ? 'bg-zinc-800/40 text-zinc-500 cursor-not-allowed border border-zinc-700/40' : (isPlaying 
-                ? 'bg-amber-700 hover:bg-amber-600' 
-                : 'bg-amber-600 hover:bg-amber-500')
+                ? 'bg-blue-700 hover:bg-blue-600' 
+                : 'bg-blue-600 hover:bg-blue-500')
             } rounded-lg transition-all ${mode === 'play' ? 'text-white hover:scale-105 active:scale-95 shadow-md' : ''}`}
             title={mode !== 'play' ? 'Switch to Play mode to play' : (isPlaying ? 'Pause' : 'Play')}
           >
@@ -2052,7 +2052,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
               })
             }}
             disabled={mode !== 'edit'}
-            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (selectionMode ? 'bg-amber-600 text-white border-amber-500' : 'bg-zinc-800/60 hover:bg-zinc-700 text-zinc-300 hover:text-white border-zinc-700/50')}`}
+            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-zinc-800/30 text-zinc-500 border-zinc-700/30 cursor-not-allowed' : (selectionMode ? 'bg-blue-600 text-white border-blue-500' : 'bg-zinc-800/60 hover:bg-zinc-700 text-zinc-300 hover:text-white border-zinc-700/50')}`}
             title="Toggle selection mode"
           >
             {selectionMode ? 'Selecting...' : 'Select'}
@@ -2079,7 +2079,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
           <button
             onClick={handleImportMidi}
             disabled={mode !== 'edit'}
-            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-amber-800/30 text-zinc-500 border-amber-700/25 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500/70 shadow-sm'}`}
+            className={`h-9 px-3 rounded-lg transition-all text-xs font-medium border ${mode !== 'edit' ? 'bg-blue-800/30 text-zinc-500 border-blue-700/25 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500/70 shadow-sm'}`}
             title="Import MIDI file into this piano roll"
           >
             Import MIDI
@@ -2111,7 +2111,7 @@ function PianoRoll({ trackId, trackName, trackColor, trackType, notes, onNotesCh
                 setBpmInput('120')
               }
             }}
-            className="w-14 px-2 py-1 bg-zinc-900 text-white rounded border border-zinc-600 focus:border-amber-500 focus:outline-none text-sm font-medium text-center"
+            className="w-14 px-2 py-1 bg-zinc-900 text-white rounded border border-zinc-600 focus:border-blue-500 focus:outline-none text-sm font-medium text-center"
             min="40"
             max="300"
           />

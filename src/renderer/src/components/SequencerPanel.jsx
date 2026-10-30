@@ -190,7 +190,7 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
           <span className="text-white">{bpm}</span>
           <button
             onClick={addRow}
-            className="ml-4 inline-flex items-center justify-center h-9 px-3 rounded-md bg-amber-600 hover:bg-amber-500 text-white shadow-sm"
+            className="ml-4 inline-flex items-center justify-center h-9 px-3 rounded-md bg-blue-600 hover:bg-blue-500 text-white shadow-sm"
           >
             + Row
           </button>
@@ -227,7 +227,7 @@ export default function SequencerPanel({ trackId, pattern, onChange, onBack, bpm
                     <button
                       key={i}
                       onClick={() => toggleStep(row.id, i)}
-                      className={`h-8 rounded-sm border ${row.steps[i] ? 'bg-amber-600 border-amber-500' : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-700'}`}
+                      className={`h-8 rounded-sm border ${row.steps[i] ? 'bg-blue-600 border-blue-500' : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-700'}`}
                     />
                   ))}
                 </div>
@@ -268,7 +268,7 @@ function SequencerPlayButton({ getIsPlaying, onToggle }) {
         setSpin(true)
         try { await onToggle?.() } finally { setSpin(false) }
       }}
-      className={`inline-flex items-center justify-center h-9 px-3 rounded-md ${isPlaying ? 'bg-amber-700 hover:bg-amber-600' : 'bg-amber-600 hover:bg-amber-500'} text-white shadow-sm`}
+      className={`inline-flex items-center justify-center h-9 px-3 rounded-md ${isPlaying ? 'bg-blue-700 hover:bg-blue-600' : 'bg-blue-600 hover:bg-blue-500'} text-white shadow-sm`}
       title={isPlaying ? 'Stop' : 'Play'}
     >
       {isPlaying ? (

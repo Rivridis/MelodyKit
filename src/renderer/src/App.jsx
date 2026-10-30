@@ -1338,13 +1338,13 @@ function App() {
       />
       {showWelcome && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 backdrop-blur">
-          <div className="w-[min(640px,96vw)] max-h-[92vh] overflow-auto rounded-[28px] border border-zinc-700/70 bg-gradient-to-br from-zinc-900 via-zinc-900/90 to-amber-900/20 p-8 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.7)]">
+          <div className="w-[min(640px,96vw)] max-h-[92vh] overflow-auto rounded-[28px] border border-zinc-700/70 bg-gradient-to-br from-zinc-900 via-zinc-900/90 to-blue-900/20 p-8 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.7)]">
             <div className="flex items-start gap-4">
-              <div className="mt-1 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-400/15 ring-1 ring-amber-300/40 shadow-inner">
-                <span className="text-lg font-semibold text-amber-200">♪</span>
+              <div className="mt-1 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-400/15 ring-1 ring-blue-300/40 shadow-inner">
+                <span className="text-lg font-semibold text-blue-200">♪</span>
               </div>
               <div className="flex-1 space-y-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">New Session</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-blue-200">New Session</p>
                 <h1 className="text-3xl font-semibold text-white">MelodyKit <span className="text-zinc-400">by Rivridis</span></h1>
                 <p className="text-sm leading-relaxed text-zinc-200">
                   Shape ideas like a professional! Add a track, drop in a loop, or open an existing project.
@@ -1370,13 +1370,13 @@ function App() {
                   Start composing
                 </button>
                 <a
-                  className="inline-flex items-center gap-2 rounded-xl bg-amber-500/15 px-4 py-2 text-sm font-medium text-amber-100 ring-1 ring-amber-300/40 transition hover:bg-amber-400/25"
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 px-4 py-2 text-sm font-medium text-blue-100 ring-1 ring-blue-300/40 transition hover:bg-blue-400/25"
                   href="https://surge-synthesizer.github.io/"
                   target="_blank"
                   rel="noreferrer"
                 >
                   <span>Download Surge XT (VST)</span>
-                  <span className="text-[11px] text-amber-200">surge-synthesizer.github.io</span>
+                  <span className="text-[11px] text-blue-200">surge-synthesizer.github.io</span>
                 </a>
               </div>
             </div>

@@ -182,7 +182,7 @@ function Sidebar({
                 className={`
                   mb-2 p-3 rounded-lg cursor-pointer transition-all
                   ${selectedTrackId === track.id 
-                    ? 'bg-zinc-800 ring-2 ring-amber-500' 
+                    ? 'bg-zinc-800 ring-2 ring-blue-500' 
                     : 'bg-zinc-800/50 hover:bg-zinc-800'
                   }
                 `}
@@ -261,7 +261,7 @@ function Sidebar({
                           onChange={(e) => setEditName(e.target.value)}
                           onBlur={() => handleRenameSubmit(track.id)}
                           onKeyDown={(e) => handleKeyDown(e, track.id)}
-                          className="w-full bg-zinc-700 text-white px-2 py-1 rounded text-xs outline-none focus:ring-2 focus:ring-amber-500"
+                          className="w-full bg-zinc-700 text-white px-2 py-1 rounded text-xs outline-none focus:ring-2 focus:ring-blue-500"
                           autoFocus
                           onClick={(e) => e.stopPropagation()}
                         />
@@ -344,7 +344,7 @@ function Sidebar({
                               onClick={() => setExpandedInstrumentCategory(isExpanded ? null : group)}
                               className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-semibold transition ${
                                 isExpanded
-                                  ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-zinc-900/40 text-amber-100'
+                                  ? 'border-blue-500/50 bg-gradient-to-r from-blue-500/20 to-zinc-900/40 text-blue-100'
                                   : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800/70'
                               }`}
                             >
@@ -397,7 +397,7 @@ function Sidebar({
                               }}
                               className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-semibold transition ${
                                 isExpanded
-                                  ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-zinc-900/40 text-amber-100'
+                                  ? 'border-blue-500/50 bg-gradient-to-r from-blue-500/20 to-zinc-900/40 text-blue-100'
                                   : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800/70'
                               }`}
                             >

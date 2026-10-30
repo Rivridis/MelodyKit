@@ -99,7 +99,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
       >
         <div className="flex items-center justify-between border-b border-zinc-700/70 px-6 py-4">
           <div>
-            <div className="text-xs uppercase tracking-[0.25em] text-amber-200/80">New Track</div>
+            <div className="text-xs uppercase tracking-[0.25em] text-blue-200/80">New Track</div>
             <h2 className="text-2xl font-semibold text-white">Create Track</h2>
           </div>
           <button
@@ -121,7 +121,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
                 }}
                 className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${
                   selectedType === type.id
-                    ? 'border-amber-400/60 bg-amber-500/10 text-white'
+                    ? 'border-blue-400/60 bg-blue-500/10 text-white'
                     : 'border-zinc-700/70 bg-zinc-900/60 text-zinc-300 hover:border-zinc-600'
                 }`}
               >
@@ -153,7 +153,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
                   </div>
                   <button
                     onClick={() => setShowInstrumentSelector(true)}
-                    className="h-10 whitespace-nowrap rounded-lg bg-amber-500/20 px-4 text-sm font-semibold text-amber-100 ring-1 ring-amber-400/40 hover:bg-amber-500/30"
+                    className="h-10 whitespace-nowrap rounded-lg bg-blue-500/20 px-4 text-sm font-semibold text-blue-100 ring-1 ring-blue-400/40 hover:bg-blue-500/30"
                   >
                     Choose Instrument
                   </button>
@@ -176,7 +176,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
                   </div>
                   <button
                     onClick={() => setShowVstSelector(true)}
-                    className="h-10 whitespace-nowrap rounded-lg bg-amber-500/20 px-4 text-sm font-semibold text-amber-100 ring-1 ring-amber-400/40 hover:bg-amber-500/30"
+                    className="h-10 whitespace-nowrap rounded-lg bg-blue-500/20 px-4 text-sm font-semibold text-blue-100 ring-1 ring-blue-400/40 hover:bg-blue-500/30"
                   >
                     Choose VST
                   </button>
@@ -199,7 +199,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
                   </div>
                   <button
                     onClick={handleChooseSample}
-                    className="h-10 whitespace-nowrap rounded-lg bg-amber-500/20 px-4 text-sm font-semibold text-amber-100 ring-1 ring-amber-400/40 hover:bg-amber-500/30"
+                    className="h-10 whitespace-nowrap rounded-lg bg-blue-500/20 px-4 text-sm font-semibold text-blue-100 ring-1 ring-blue-400/40 hover:bg-blue-500/30"
                   >
                     Choose Sample
                   </button>
@@ -246,7 +246,7 @@ function AddTrackModal({ isOpen, onClose, onCreateInstrumentTrack, onCreateVstTr
             <button
               onClick={handleCreate}
               disabled={!canCreate}
-              className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-zinc-900 shadow-md transition disabled:opacity-40 disabled:cursor-not-allowed"
+              className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-zinc-900 shadow-md transition disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Create Track
             </button>

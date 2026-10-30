@@ -3002,7 +3002,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
             disabled={isRecording}
             title="Rewind to start"
             aria-label="Rewind to start"
-            className="inline-flex items-center justify-center h-9 w-9 rounded-md bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white shadow focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            className="inline-flex items-center justify-center h-9 w-9 rounded-md bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white shadow focus:outline-none focus:ring-2 focus:ring-blue-500/60"
           >
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
               <path d="M11 7l-6 5 6 5V7zm8 0l-6 5 6 5V7z"></path>
@@ -3026,7 +3026,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
                   ? 'Audio clips loading'
                   : (isPlaying ? 'Pause' : 'Play')
             }
-            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed text-white shadow focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed text-white shadow focus:outline-none focus:ring-2 focus:ring-blue-500/60"
           >
             {isPlaying ? (
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
@@ -3044,7 +3044,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
 
           <button
             onClick={onOpenNodeGraph}
-            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-sm font-semibold text-amber-200 border border-amber-500/40 transition"
+            className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-blue-500/20 hover:bg-blue-500/30 text-sm font-semibold text-blue-200 border border-blue-500/40 transition"
             title="Open effects node editor"
             aria-label="Open effects node editor"
           >
@@ -3091,7 +3091,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
             }}
             className={`inline-flex items-center justify-center h-9 px-3 rounded-md transition-colors text-sm font-medium ${
               loopStart !== null && loopEnd !== null
-                ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                ? 'bg-blue-600 hover:bg-blue-500 text-white'
                 : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
             }`}
             title={loopStart !== null && loopEnd !== null ? 'Disable Loop' : 'Enable Loop at Current Position'}
@@ -3115,7 +3115,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
         <button
           onClick={handleSaveWav}
           disabled={isRecording || isPlaying}
-          className="inline-flex items-center justify-center h-9 px-3 bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors ring-1 ring-inset ring-amber-500/50 text-sm"
+          className="inline-flex items-center justify-center h-9 px-3 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors ring-1 ring-inset ring-blue-500/50 text-sm"
           title="Record and save mix to WAV"
         >
           {isRecording ? 'Saving…' : 'Export'}
@@ -3143,7 +3143,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
                 setBpmInput('120')
               }
             }}
-            className="h-9 w-16 px-2 bg-zinc-800 text-white rounded-md border border-zinc-700 focus:border-amber-500 focus:outline-none text-sm"
+            className="h-9 w-16 px-2 bg-zinc-800 text-white rounded-md border border-zinc-700 focus:border-blue-500 focus:outline-none text-sm"
           />
         </div>
 
@@ -3252,7 +3252,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
                           onClick={() => setTrackMuted?.(prev => ({ ...prev, [track.id]: !prev[track.id] }))}
                           className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
                             isMuted 
-                              ? 'bg-amber-500 text-zinc-900' 
+                              ? 'bg-blue-500 text-zinc-900' 
                               : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
                           }`}
                           style={{ pointerEvents: 'auto' }}
@@ -3264,7 +3264,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
                           onClick={() => setTrackSoloed?.(prev => ({ ...prev, [track.id]: !prev[track.id] }))}
                           className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
                             isSoloed 
-                              ? 'bg-amber-500 text-zinc-900' 
+                              ? 'bg-blue-500 text-zinc-900' 
                               : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
                           }`}
                           style={{ pointerEvents: 'auto' }}
@@ -3301,7 +3301,7 @@ const TrackTimeline = forwardRef(function TrackTimeline({ tracks, trackNotes, se
                             try { pre.gain.setValueAtTime(preTarget, audioContextRef.current.currentTime) } catch { pre.gain.value = preTarget }
                           }
                         }}
-                        className="logic-volume w-full focus:ring-2 focus:ring-amber-500"
+                        className="logic-volume w-full focus:ring-2 focus:ring-blue-500"
                         style={{
                           pointerEvents: 'auto',
                           background: `linear-gradient(90deg, #f59e0b ${Math.round((value / 150) * 100)}%, #3f3f46 ${Math.round((value / 150) * 100)}%)`

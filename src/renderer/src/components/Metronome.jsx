@@ -104,7 +104,7 @@ function Metronome({ bpm, isPlaying, onPlayingChange }) {
         onClick={() => onPlayingChange?.(!isPlaying)}
         className={`flex items-center justify-center w-7 h-7 rounded transition ${
           isPlaying 
-            ? 'bg-zinc-800 text-amber-300 hover:bg-zinc-700' 
+            ? 'bg-zinc-800 text-blue-300 hover:bg-zinc-700' 
             : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
         }`}
         title={isPlaying ? 'Stop metronome' : 'Start metronome'}
@@ -129,8 +129,8 @@ function Metronome({ bpm, isPlaying, onPlayingChange }) {
             className={`w-1.5 h-1.5 rounded-full transition-all ${
               isPlaying && beat === i
                 ? i === 0 
-                  ? 'bg-amber-300 scale-125' 
-                  : 'bg-amber-400 scale-125'
+                  ? 'bg-blue-300 scale-125' 
+                  : 'bg-blue-400 scale-125'
                 : 'bg-zinc-700'
             }`}
           />
